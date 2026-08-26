@@ -56,10 +56,11 @@ at all: in a real note the URLs are longer than the rows they belong to.
   invents one — so rather than guess, MarkRead offers the three that were on the
   table: **MarkRead** (headings in the system accent, emphasis and code
   coloured), **Like Xcode** (no colour on headings or emphasis; the table header
-  carries it instead) and **Plain** (no colour except links). Code, tables and
-  front matter stay monospaced whatever face is chosen: a table shown as raw
-  markdown is hand-aligned text, and hand-aligned columns only line up in a
-  fixed-pitch face.
+  carries it instead) and **Plain** (no colour except links). Code, table rows and
+  front matter take a **code font** of their own, and only fixed-pitch faces are
+  offered for it — a table shown as raw markdown is hand-aligned text, and
+  hand-aligned columns only line up when every character is the same width. A
+  proportional family is refused outright, not merely left out of the picker.
 - Editing commands under the Format menu: bold, italic, strikethrough,
   highlight, inline code, headings 1–3, lists, tasks, quotes, code blocks, links.
 - Save refuses to run when the file changed on disk since it was opened, and

@@ -18,6 +18,9 @@ struct SettingsView: View {
     private var family: String = ""
     @AppStorage(MarkdownStyle.Appearance.lookKey)
     private var look: String = MarkdownStyle.Look.markRead.rawValue
+    /// Empty means the system monospaced face.
+    @AppStorage(MarkdownStyle.Appearance.monoFamilyKey)
+    private var codeFamily: String = ""
 
     var body: some View {
         Form {
@@ -57,8 +60,18 @@ struct SettingsView: View {
                             .frame(width: 42, alignment: .trailing)
                     }
                 }
+                Picker("Code font:", selection: $codeFamily) {
+                    Text("System").tag("")
+                    Divider()
+                    // Fixed-pitch families only. Not a matter of taste: a table
+                    // shown as raw markdown is hand-aligned with spaces, and a
+                    // proportional face turns its columns back into ragged text.
+                    ForEach(MarkdownStyle.monospacedFamilies, id: \.self) { name in
+                        Text(name).tag(name)
+                    }
+                }
             } footer: {
-                Text("Code, tables and front matter stay monospaced: a table shown as raw markdown is hand-aligned text, and hand-aligned columns only line up in a fixed-pitch face.")
+                Text("Code, table rows and front matter are set in the code font. Only fixed-pitch faces are offered: a table shown as raw markdown is hand-aligned text, and hand-aligned columns only line up when every character is the same width.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -66,6 +79,7 @@ struct SettingsView: View {
             Section {
                 Button("Restore Defaults") {
                     family = ""
+                    codeFamily = ""
                     size = MarkdownStyle.Appearance.defaultSize
                 }
             }
@@ -77,5 +91,6 @@ struct SettingsView: View {
         .onChange(of: look) { MarkdownStyle.Appearance.reload() }
         .onChange(of: size) { MarkdownStyle.Appearance.reload() }
         .onChange(of: family) { MarkdownStyle.Appearance.reload() }
+        .onChange(of: codeFamily) { MarkdownStyle.Appearance.reload() }
     }
 }

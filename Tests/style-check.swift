@@ -123,6 +123,52 @@ struct StyleCheck {
         check("switching back restores the accent", "Heading", in: "# Heading",
               is: MarkdownStyle.Palette.heading)
 
+        // The code face. Every family the picker offers has to be fixed-pitch,
+        // and anything else has to be refused rather than merely not offered —
+        // a raw markdown table is aligned by hand with spaces, so a proportional
+        // face turns its columns back into ragged text.
+        func useCodeFamily(_ name: String) {
+            UserDefaults.standard.set(name, forKey: MarkdownStyle.Appearance.monoFamilyKey)
+            MarkdownStyle.Appearance.reload()
+        }
+        defer {
+            UserDefaults.standard.removeObject(forKey: MarkdownStyle.Appearance.monoFamilyKey)
+            MarkdownStyle.Appearance.reload()
+        }
+
+        check("the default code face is fixed-pitch",
+              MarkdownStyle.isFixedPitch(MarkdownStyle.mono),
+              MarkdownStyle.mono.description)
+        check("every offered family is fixed-pitch",
+              !MarkdownStyle.monospacedFamilies.isEmpty
+                  && MarkdownStyle.monospacedFamilies.allSatisfy { family in
+                      guard let font = NSFont(descriptor: NSFontDescriptor(fontAttributes: [.family: family]),
+                                              size: 12) else { return false }
+                      return MarkdownStyle.isFixedPitch(font)
+                  },
+              MarkdownStyle.monospacedFamilies.joined(separator: ", "))
+
+        if let offered = MarkdownStyle.monospacedFamilies.first {
+            useCodeFamily(offered)
+            check("a chosen fixed-pitch family reaches the code font",
+                  MarkdownStyle.mono.familyName == offered,
+                  "got \(MarkdownStyle.mono.familyName ?? "nil"), wanted \(offered)")
+            check("code is set in the chosen face",
+                  font(of: "swift", in: "Run `swift build` now.")?.familyName == offered)
+            check("a raw table row is set in it too",
+                  font(of: "alpha", in: "| alpha | beta |\n|---|---|\n| c | d |")?.familyName == offered)
+            check("body text is not", font(of: "word", in: "A word.")?.familyName != offered)
+        }
+
+        // The one that matters: a proportional family written straight into the
+        // plist must not reach the code font.
+        useCodeFamily("Helvetica")
+        check("a proportional family is refused", MarkdownStyle.monoFamily == nil,
+              "got \(MarkdownStyle.monoFamily ?? "nil")")
+        check("and the code font stays fixed-pitch",
+              MarkdownStyle.isFixedPitch(MarkdownStyle.mono), MarkdownStyle.mono.description)
+        useCodeFamily("")
+
         print(failures == 0 ? "\nAll checks passed." : "\n\(failures) FAILED")
         exit(failures == 0 ? 0 : 1)
     }

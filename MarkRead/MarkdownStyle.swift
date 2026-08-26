@@ -77,6 +77,7 @@ enum MarkdownStyle {
     enum Appearance {
         static let sizeKey = "bodySize"
         static let familyKey = "bodyFontFamily"
+        static let monoFamilyKey = "codeFontFamily"
         static let lookKey = "look"
         static let defaultSize: Double = 15
         static let sizeRange: ClosedRange<Double> = 11 ... 28
@@ -89,6 +90,7 @@ enum MarkdownStyle {
         static func reload() {
             MarkdownStyle.bodySize = storedSize()
             MarkdownStyle.bodyFamily = storedFamily()
+            MarkdownStyle.monoFamily = storedMonoFamily()
             MarkdownStyle.look = storedLook()
             NotificationCenter.default.post(name: didChange, object: nil)
         }
@@ -107,6 +109,24 @@ enum MarkdownStyle {
             return CGFloat(min(max(stored, sizeRange.lowerBound), sizeRange.upperBound))
         }
 
+        /// The stored face for code, or nil for the system monospaced one.
+        ///
+        /// 🔴 A family that is not fixed-pitch is refused here, not merely
+        /// discouraged in the picker. A markdown table shown as raw text is
+        /// aligned by hand with spaces: give it a proportional face and its
+        /// columns stop being columns. The picker offers only fixed-pitch
+        /// families; this is what stops a value typed straight into the plist,
+        /// or a family that changed since it was chosen, from doing the damage
+        /// anyway.
+        static func storedMonoFamily() -> String? {
+            guard let name = UserDefaults.standard.string(forKey: monoFamilyKey), !name.isEmpty,
+                  let font = NSFont(descriptor: NSFontDescriptor(fontAttributes: [.family: name]),
+                                    size: 12),
+                  MarkdownStyle.isFixedPitch(font)
+            else { return nil }
+            return name
+        }
+
         /// The stored family, or nil for the system font. A family that has been
         /// uninstalled since it was chosen counts as nil rather than as a font
         /// that cannot be built.
@@ -122,8 +142,28 @@ enum MarkdownStyle {
     private(set) static var bodySize: CGFloat = Appearance.storedSize()
     /// Family the reader chose for body text, or nil for the system font.
     private(set) static var bodyFamily: String? = Appearance.storedFamily()
+    /// Family the reader chose for code, or nil for the system monospaced face.
+    private(set) static var monoFamily: String? = Appearance.storedMonoFamily()
     /// Which of the three looks is on.
     private(set) static var look: Look = Appearance.storedLook()
+
+    /// True for a face whose every character is the same width.
+    ///
+    /// Both tests, because they disagree: `isFixedPitch` is measured from the
+    /// font's own metrics, the symbolic trait is what the designer declared, and
+    /// a face can carry one without the other.
+    static func isFixedPitch(_ font: NSFont) -> Bool {
+        font.isFixedPitch || font.fontDescriptor.symbolicTraits.contains(.monoSpace)
+    }
+
+    /// Families a reader may pick for code. Measured on this machine: five out
+    /// of a hundred and eighty. Built once — asking 180 families for a font is
+    /// not something to do while a picker is drawing.
+    static let monospacedFamilies: [String] = NSFontManager.shared.availableFontFamilies.filter {
+        guard let font = NSFont(descriptor: NSFontDescriptor(fontAttributes: [.family: $0]), size: 12)
+        else { return false }
+        return isFixedPitch(font)
+    }
 
     /// The reading face at an arbitrary size: the one place that knows whether
     /// that is the system font or a family from Settings.
@@ -148,9 +188,16 @@ enum MarkdownStyle {
     /// that branch is dormant. The reason is plainer: a markdown table shown as
     /// raw text is *hand-aligned* text, and hand-aligned columns only line up in
     /// a fixed-pitch face. Code stops reading as code in a proportional one.
-    /// A different *monospaced* family here would be fine; a proportional one
-    /// would not.
-    static var mono: NSFont { .monospacedSystemFont(ofSize: bodySize - 1, weight: .regular) }
+    /// Which is why Settings offers a face for code, and offers only fixed-pitch
+    /// ones — `Appearance.storedMonoFamily` refuses anything else outright.
+    static var mono: NSFont {
+        let size = bodySize - 1
+        guard let monoFamily,
+              let font = NSFont(descriptor: NSFontDescriptor(fontAttributes: [.family: monoFamily]),
+                                size: size)
+        else { return .monospacedSystemFont(ofSize: size, weight: .regular) }
+        return font
+    }
 
     /// Width of one monospaced character, for `.tableCellPad`.
     ///
