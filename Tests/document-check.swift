@@ -101,6 +101,73 @@ struct DocumentCheck {
                   (try? document.save(force: true)) != nil)
         }
 
+        // Extended attributes: saving must not strip what the system keeps beside
+        // the bytes. The byte-identity cases above are blind to this — they write
+        // to fresh temporary files, which have no attributes to lose, so their
+        // zero was a dead zero for this whole category.
+        let tagged = scratch.appendingPathComponent("tagged.md")
+        try? Data("before\n".utf8).write(to: tagged)
+        _ = Data("probe".utf8).withUnsafeBytes {
+            setxattr(tagged.path, "com.example.probe", $0.baseAddress, 5, 0, 0)
+        }
+        try? (tagged as NSURL).setResourceValue(["Czerwony"], forKey: .tagNamesKey)
+
+        // Every read on a fresh URL: URL caches resource values on the instance,
+        // which is how the conflict check was fooled once already.
+        func tagNames(_ url: URL) -> [String] {
+            let fresh = URL(fileURLWithPath: url.path)
+            return (try? fresh.resourceValues(forKeys: [.tagNamesKey]))?.tagNames ?? []
+        }
+        func hasProbe(_ url: URL) -> Bool {
+            getxattr(url.path, "com.example.probe", nil, 0, 0, 0) > 0
+        }
+
+        check("positive control: the tag and the xattr are there before saving",
+              tagNames(tagged) == ["Czerwony"] && hasProbe(tagged))
+        if let document = try? MarkdownDocument(url: tagged) {
+            document.text = "after\n"
+            try? document.save(force: true)
+            check("Finder tag survives a save", tagNames(tagged) == ["Czerwony"],
+                  "\(tagNames(tagged))")
+            check("custom xattr survives a save", hasProbe(tagged))
+            check("the edit still reached the file",
+                  (try? Data(contentsOf: tagged)) == Data("after\n".utf8))
+        }
+
+        // Encoding: a note read as Latin-1 must not be rewritten as UTF-8 behind
+        // the user's back. The save refuses; converting is a separate, asked-for
+        // step that also records the new encoding.
+        //
+        // The `com.apple.TextEncoding` xattr is how macOS records the encoding of
+        // a text file (TextEdit writes it). Without it the same bytes cannot be
+        // decoded at all — measured: `String(contentsOf:usedEncoding:)` throws.
+        let latin = scratch.appendingPathComponent("latin.md")
+        let latinBytes = "Gr\u{FC}\u{DF}e\n".data(using: .isoLatin1)!
+        try? latinBytes.write(to: latin)
+        let hint = Data("iso-8859-1;513".utf8)
+        _ = hint.withUnsafeBytes {
+            setxattr(latin.path, "com.apple.TextEncoding", $0.baseAddress, hint.count, 0, 0)
+        }
+        if let document = try? MarkdownDocument(url: latin) {
+            check("a non-UTF-8 note keeps its own encoding", document.encoding == .isoLatin1,
+                  "\(document.encoding)")
+            document.text += "note \u{1F5D2}\n"
+            // The premise of the next check, stated out loud rather than assumed.
+            check("positive control: that character really does not fit the encoding",
+                  "\u{1F5D2}".data(using: document.encoding) == nil)
+            var refused = false
+            do { try document.save(force: true) } catch { refused = true }
+            check("save refuses rather than switching encoding silently", refused)
+            check("the file on disk is untouched after the refusal",
+                  (try? Data(contentsOf: latin)) == latinBytes)
+            try? document.save(force: true, convertingToUTF8: true)
+            check("converting when asked writes UTF-8",
+                  (try? Data(contentsOf: latin)) == Data("Gr\u{FC}\u{DF}e\nnote \u{1F5D2}\n".utf8))
+            check("the new encoding is remembered", document.encoding == .utf8)
+        } else {
+            check("a non-UTF-8 note opens at all", false, "MarkdownDocument threw")
+        }
+
         // Optional: every .md under a folder given on the command line.
         for path in CommandLine.arguments.dropFirst() {
             var checked = 0, differ = 0

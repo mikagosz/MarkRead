@@ -60,9 +60,9 @@ final class TableLayout {
         var delimiter: Int?
         var parsed: [(line: Int, cells: [NSRange])] = []
         for line in lines {
-            let cells = Self.cellRanges(text, map.lines[line].range)
+            let cells = MarkdownTables.cellRanges(text, map.lines[line].range)
             guard !cells.isEmpty else { continue }
-            if Self.isDelimiter(cells, text) { delimiter = line; continue }
+            if MarkdownTables.isDelimiter(cells, text) { delimiter = line; continue }
             parsed.append((line, cells))
         }
         self.delimiterLine = delimiter
@@ -286,29 +286,7 @@ final class TableLayout {
         return nil
     }
 
-    // MARK: - Parsing helpers
-
-    private static func cellRanges(_ text: NSString, _ line: NSRange) -> [NSRange] {
-        var pipes: [Int] = []
-        var index = line.location
-        let end = NSMaxRange(line)
-        while index < end {
-            if text.character(at: index) == 0x7C,
-               index == line.location || text.character(at: index - 1) != 0x5C {
-                pipes.append(index)
-            }
-            index += 1
-        }
-        guard pipes.count >= 2 else { return [] }
-        return (0 ..< pipes.count - 1).map { i in
-            NSRange(location: pipes[i] + 1, length: max(0, pipes[i + 1] - pipes[i] - 1))
-        }
-    }
-
-    private static func isDelimiter(_ cells: [NSRange], _ text: NSString) -> Bool {
-        cells.allSatisfy { cell in
-            let body = text.substring(with: cell).trimmingCharacters(in: .whitespaces)
-            return !body.isEmpty && body.allSatisfy { $0 == "-" || $0 == ":" }
-        }
-    }
+    // Cell ranges and the `|---|` row are recognised by `MarkdownTables`, which
+    // is the single place that knows how a table row is written. This file used
+    // to carry its own copy of both.
 }

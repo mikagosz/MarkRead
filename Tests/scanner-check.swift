@@ -2,6 +2,7 @@
 //
 //   cd "Xcode programy/MarkRead"
 //   swiftc -parse-as-library MarkRead/MarkdownSyntax.swift MarkRead/MarkdownScanner.swift \
+//          MarkRead/MarkdownTables.swift \
 //          Tests/scanner-check.swift -o /tmp/scanner-check && /tmp/scanner-check
 //
 // The point it defends: decorations describe the raw text and never replace it,
@@ -140,6 +141,26 @@ struct ScannerCheck {
             check("line map covers text: \(markdown.prefix(16).debugDescription)",
                   total == text.length, "got \(total), want \(text.length)")
         }
+
+        // 8. Table rows, asked about a text shorter than the map describing it.
+        //
+        // Not a hypothetical: AppKit sends a selection notification from inside
+        // `endEditing()`, so between replacing the storage and rebuilding the map
+        // there is a window in which the map is one document behind the string.
+        // Reading a range from the old map then walked off the end of the new one
+        // and killed the process.
+        let short = "krotki" as NSString
+        check("table row test clamps to the live string",
+              MarkdownTables.isRow(short, NSRange(location: 40, length: 12)) == false)
+        check("table row test clamps a range that starts inside and runs past the end",
+              MarkdownTables.isRow(short, NSRange(location: 3, length: 99)) == false)
+        // Positive control: the same call does recognise a real row, so the two
+        // "false" answers above mean something.
+        let row = "  | a | b |\n" as NSString
+        check("positive control: a real table row is still recognised",
+              MarkdownTables.isRow(row, NSRange(location: 0, length: row.length)))
+        check("a paragraph is not a table row",
+              MarkdownTables.isRow("zwykly akapit" as NSString, NSRange(location: 0, length: 13)) == false)
 
         print(failures == 0 ? "\nAll checks passed." : "\n\(failures) FAILED")
         exit(failures == 0 ? 0 : 1)
