@@ -16,9 +16,27 @@ struct SettingsView: View {
     /// falls back to.
     @AppStorage(MarkdownStyle.Appearance.familyKey)
     private var family: String = ""
+    @AppStorage(MarkdownStyle.Appearance.lookKey)
+    private var look: String = MarkdownStyle.Look.markRead.rawValue
 
     var body: some View {
         Form {
+            Section {
+                Picker("Look:", selection: $look) {
+                    ForEach(MarkdownStyle.Look.allCases) { option in
+                        Text(option.name).tag(option.rawValue)
+                    }
+                }
+                .pickerStyle(.inline)
+                Text(MarkdownStyle.Look(rawValue: look)?.detail ?? "")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } header: {
+                Text("A Markdown file stores no appearance of its own — every program invents one. Pick the one you want this program to invent.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section {
                 Picker("Text font:", selection: $family) {
                     Text("System").tag("")
@@ -40,7 +58,7 @@ struct SettingsView: View {
                     }
                 }
             } footer: {
-                Text("Code, tables and front matter stay monospaced: table columns are padded in whole monospaced characters, so a proportional face there would take their alignment with it.")
+                Text("Code, tables and front matter stay monospaced: a table shown as raw markdown is hand-aligned text, and hand-aligned columns only line up in a fixed-pitch face.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -56,6 +74,7 @@ struct SettingsView: View {
         .frame(width: 460)
         .fixedSize()
         // One reload for either setting: it re-reads both and posts the change.
+        .onChange(of: look) { MarkdownStyle.Appearance.reload() }
         .onChange(of: size) { MarkdownStyle.Appearance.reload() }
         .onChange(of: family) { MarkdownStyle.Appearance.reload() }
     }

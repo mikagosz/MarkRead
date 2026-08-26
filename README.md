@@ -34,7 +34,10 @@ at all: in a real note the URLs are longer than the rows they belong to.
 ## What it does
 
 - Live preview in one column: headings, emphasis, code, tables, task lists,
-  block quotes and Obsidian callouts are styled where they sit.
+  block quotes and Obsidian callouts are styled where they sit. Tables are drawn
+  with a closed, rounded frame. Whichever look is on, a colour is only ever laid
+  on a run that is still plain body text, so bold inside a heading keeps the
+  heading's colour rather than punching a hole in it.
 - **Working links.** Named links, bare URLs, relative paths and `[[Wiki Links]]`
   are all clickable. A wiki link resolves against the folder in the sidebar, or
   against the note's own folder when no folder is open; a relative path resolves
@@ -48,9 +51,15 @@ at all: in a real note the URLs are longer than the rows they belong to.
 - **New Note** (⌘N, or the pencil in the toolbar): the save panel picks the name
   and the place, the file is created empty and opened like any other. There is no
   such thing here as a document without a file.
-- Settings (⌘,) for the reading face and its size. Code, tables and front matter
-  stay monospaced whatever is chosen — table columns are padded in whole
-  monospaced characters, and a proportional face there loses their alignment.
+- Settings (⌘,) for the reading face, its size, and one of three **looks**. A
+  Markdown file stores no appearance of its own — every program that opens it
+  invents one — so rather than guess, MarkRead offers the three that were on the
+  table: **MarkRead** (headings in the system accent, emphasis and code
+  coloured), **Like Xcode** (no colour on headings or emphasis; the table header
+  carries it instead) and **Plain** (no colour except links). Code, tables and
+  front matter stay monospaced whatever face is chosen: a table shown as raw
+  markdown is hand-aligned text, and hand-aligned columns only line up in a
+  fixed-pitch face.
 - Editing commands under the Format menu: bold, italic, strikethrough,
   highlight, inline code, headings 1–3, lists, tasks, quotes, code blocks, links.
 - Save refuses to run when the file changed on disk since it was opened, and
@@ -103,7 +112,7 @@ Neither holds anything else.
 
 ## Tests
 
-Headless, no frameworks, no fixtures. All four run in under a second.
+Headless, no frameworks, no fixtures. All five run in under a second.
 
 ```sh
 swiftc -parse-as-library MarkRead/MarkdownSyntax.swift MarkRead/MarkdownScanner.swift \
@@ -141,6 +150,16 @@ come back italic because ⌘I found one star on each side.
 swiftc -parse-as-library -swift-version 6 -default-isolation MainActor \
        MarkRead/EditorActions.swift Tests/editor-check.swift \
        -o /tmp/editor-check && /tmp/editor-check
+```
+
+The fifth checks what colour a construct ends up in — specifically that emphasis
+never paints over a colour something else was given first:
+
+```sh
+swiftc -parse-as-library -swift-version 6 -default-isolation MainActor \
+       MarkRead/MarkdownSyntax.swift MarkRead/MarkdownScanner.swift \
+       MarkRead/MarkdownTables.swift MarkRead/MarkdownStyle.swift \
+       Tests/style-check.swift -o /tmp/style-check && /tmp/style-check
 ```
 
 ### The oracle

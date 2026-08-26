@@ -72,6 +72,7 @@ final class TableLayout {
         // happens on a copy — the document keeps every character.
         var built: [Row] = []
         for (index, row) in parsed.enumerated() {
+            let isHeader = index == 0 && delimiter != nil
             var cells: [Cell] = []
             for range in row.cells {
                 let piece = NSMutableAttributedString(attributedString: storage.attributedSubstring(from: range))
@@ -83,9 +84,11 @@ final class TableLayout {
                 }
                 Self.trim(piece)
                 Self.useProportionalFont(piece)
+                Self.useBodyColour(piece)
+                if isHeader { Self.useHeaderStyle(piece) }
                 cells.append(Self.makeCell(piece))
             }
-            built.append(Row(cells: cells, isHeader: index == 0 && delimiter != nil, line: row.line))
+            built.append(Row(cells: cells, isHeader: isHeader, line: row.line))
         }
         self.rows = built
         measure()
@@ -130,6 +133,45 @@ final class TableLayout {
         paragraph.lineBreakMode = .byWordWrapping
         paragraph.lineSpacing = 1.5
         text.addAttribute(.paragraphStyle, value: paragraph, range: whole)
+    }
+
+    /// Takes the raw-row tint back off, leaving code and links their own colour.
+    ///
+    /// `MarkdownStyle` colours a table row so that a row being *edited* — pipes
+    /// and all — reads as a table rather than as a stray monospaced paragraph.
+    /// A drawn table needs the opposite: every cell in one hue looks faded, not
+    /// structured, since the border already says "table". The tint is put on in
+    /// one place and taken off in one place.
+    private static func useBodyColour(_ text: NSMutableAttributedString) {
+        let whole = NSRange(location: 0, length: text.length)
+        guard let tint = MarkdownStyle.Palette.tableRow else { return }
+        text.enumerateAttribute(.foregroundColor, in: whole) { value, range, _ in
+            guard value as? NSColor == tint else { return }
+            text.addAttribute(.foregroundColor, value: NSColor.labelColor, range: range)
+        }
+    }
+
+    /// The header row of a drawn table, in whichever way the current look wants
+    /// it: bold, coloured, both or neither.
+    ///
+    /// The colour goes on by the same rule as everywhere else — only where the
+    /// run is still plain body text — so a link or a piece of code sitting in a
+    /// header cell keeps its own colour.
+    private static func useHeaderStyle(_ text: NSMutableAttributedString) {
+        let whole = NSRange(location: 0, length: text.length)
+        if MarkdownStyle.Palette.tableHeaderIsBold {
+            text.enumerateAttribute(.font, in: whole) { value, range, _ in
+                guard let font = value as? NSFont else { return }
+                let descriptor = font.fontDescriptor
+                    .withSymbolicTraits(font.fontDescriptor.symbolicTraits.union(.bold))
+                if let bold = NSFont(descriptor: descriptor, size: font.pointSize) {
+                    text.addAttribute(.font, value: bold, range: range)
+                }
+            }
+        }
+        if let colour = MarkdownStyle.Palette.tableHeader {
+            MarkdownStyle.paintIfPlain(colour, text, whole)
+        }
     }
 
     /// Drops the spaces a table author put around a cell's text.
@@ -232,20 +274,44 @@ final class TableLayout {
 
     // MARK: - Drawing
 
+    /// Corner radius of the table's outer frame.
+    static let cornerRadius: CGFloat = 6
+
     /// Draws one row into the rect its source line was given.
+    ///
+    /// The outer frame is drawn **in pieces**, because this is called once per
+    /// source line and there is no moment at which the whole table is one rect:
+    /// the first row carries the top edge and the top corners, the last row the
+    /// bottom edge and the bottom corners, and every row in between carries its
+    /// own two side edges. Until 0.2.5 none of them were drawn at all — the
+    /// renderer put down column separators and row rules only, so the table had
+    /// no left, right, top or bottom side and read as an open grid.
     func draw(line: Int, in rect: CGRect) {
         guard let row = rows.first(where: { $0.line == line }) else {
-            // The delimiter line: a single rule under the header.
+            // The delimiter line: the rule under the header, plus the one pixel
+            // of side edge that belongs to this line. Skipping it left two
+            // notches in the frame.
             if line == delimiterLine {
                 NSColor.separatorColor.setFill()
                 CGRect(x: rect.minX, y: rect.minY, width: tableWidth, height: 1).fill()
+                NSColor.separatorColor.setStroke()
+                let sides = NSBezierPath()
+                sides.lineWidth = 1
+                appendSides(sides, rect, height: 1, isFirst: false, isLast: false)
+                sides.stroke()
             }
             return
         }
 
+        let isFirst = rows.first?.line == line
+        let isLast = rows.last?.line == line
+
         if row.isHeader {
             NSColor.quaternarySystemFill.setFill()
-            CGRect(x: rect.minX, y: rect.minY, width: tableWidth, height: row.height).fill()
+            // Follows the frame's top corners rather than filling a square
+            // rectangle behind them, which showed as two grey nicks outside the
+            // rounded border.
+            headerFill(rect, height: row.height, rounded: isFirst).fill()
         }
 
         NSColor.separatorColor.setStroke()
@@ -264,12 +330,70 @@ final class TableLayout {
             }
         }
 
-        // Row rule, except under the header where the delimiter line draws it.
-        if !row.isHeader {
+        // Row rule, except under the header where the delimiter line draws it,
+        // and except at the very top where the frame's own edge is the rule.
+        if !row.isHeader, !isFirst {
             border.move(to: CGPoint(x: rect.minX, y: rect.minY))
             border.line(to: CGPoint(x: rect.minX + tableWidth, y: rect.minY))
         }
+        appendSides(border, rect, height: row.height, isFirst: isFirst, isLast: isLast)
         border.stroke()
+    }
+
+    /// This row's share of the outer frame: its two side edges, plus the top or
+    /// bottom edge with its corners when the row is the table's first or last.
+    private func appendSides(_ path: NSBezierPath, _ rect: CGRect, height: CGFloat,
+                             isFirst: Bool, isLast: Bool) {
+        let radius = Self.cornerRadius
+        let left = rect.minX
+        let right = rect.minX + tableWidth
+        let top = rect.minY
+        let bottom = rect.minY + height
+        // Tangent arcs rather than `appendArc(withCenter:)`: the text view is
+        // flipped, and centre-and-angle arcs come out mirrored there.
+        if isFirst {
+            path.move(to: CGPoint(x: left, y: bottom))
+            path.line(to: CGPoint(x: left, y: top + radius))
+            path.appendArc(from: CGPoint(x: left, y: top), to: CGPoint(x: left + radius, y: top),
+                           radius: radius)
+            path.line(to: CGPoint(x: right - radius, y: top))
+            path.appendArc(from: CGPoint(x: right, y: top), to: CGPoint(x: right, y: top + radius),
+                           radius: radius)
+            path.line(to: CGPoint(x: right, y: bottom))
+        } else if isLast {
+            path.move(to: CGPoint(x: left, y: top))
+            path.line(to: CGPoint(x: left, y: bottom - radius))
+            path.appendArc(from: CGPoint(x: left, y: bottom), to: CGPoint(x: left + radius, y: bottom),
+                           radius: radius)
+            path.line(to: CGPoint(x: right - radius, y: bottom))
+            path.appendArc(from: CGPoint(x: right, y: bottom), to: CGPoint(x: right, y: bottom - radius),
+                           radius: radius)
+            path.line(to: CGPoint(x: right, y: top))
+        } else {
+            path.move(to: CGPoint(x: left, y: top))
+            path.line(to: CGPoint(x: left, y: bottom))
+            path.move(to: CGPoint(x: right, y: top))
+            path.line(to: CGPoint(x: right, y: bottom))
+        }
+    }
+
+    /// The header's background, with the frame's top corners taken off it when
+    /// the header is the table's first row.
+    private func headerFill(_ rect: CGRect, height: CGFloat, rounded: Bool) -> NSBezierPath {
+        let box = CGRect(x: rect.minX, y: rect.minY, width: tableWidth, height: height)
+        guard rounded else { return NSBezierPath(rect: box) }
+        let radius = Self.cornerRadius
+        let path = NSBezierPath()
+        path.move(to: CGPoint(x: box.minX, y: box.maxY))
+        path.line(to: CGPoint(x: box.minX, y: box.minY + radius))
+        path.appendArc(from: CGPoint(x: box.minX, y: box.minY),
+                       to: CGPoint(x: box.minX + radius, y: box.minY), radius: radius)
+        path.line(to: CGPoint(x: box.maxX - radius, y: box.minY))
+        path.appendArc(from: CGPoint(x: box.maxX, y: box.minY),
+                       to: CGPoint(x: box.maxX, y: box.minY + radius), radius: radius)
+        path.line(to: CGPoint(x: box.maxX, y: box.maxY))
+        path.close()
+        return path
     }
 
     var tableWidth: CGFloat { columnWidths.reduce(0, +) }

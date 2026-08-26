@@ -37,9 +37,47 @@ enum MarkdownStyle {
     /// Cached on purpose rather than read on every access: `body`, `mono` and
     /// `heading` are asked for once per decoration, which on a long note is
     /// thousands of times per keystroke.
+    /// The three looks a reader can pick between.
+    ///
+    /// They exist because the same `.md` file carries no appearance of its own:
+    /// what a note looks like is invented by whichever program opens it, so
+    /// "the same as everywhere else" has to mean "the same as one named
+    /// program". Rather than guess which one, MarkRead offers the three that
+    /// were actually on the table.
+    enum Look: String, CaseIterable, Identifiable {
+        /// What MarkRead settled on by itself: the system accent on headings,
+        /// colour on emphasis and code.
+        case markRead
+        /// Xcode's markdown preview: headings and emphasis carry no colour at
+        /// all, and the table header is the coloured thing instead.
+        case xcode
+        /// No colour this program invented. Links keep theirs, headings are told
+        /// apart by size, and that is the lot.
+        case plain
+
+        var id: String { rawValue }
+
+        var name: String {
+            switch self {
+            case .markRead: "MarkRead"
+            case .xcode: "Like Xcode"
+            case .plain: "Plain"
+            }
+        }
+
+        var detail: String {
+            switch self {
+            case .markRead: "Headings in the system accent, emphasis and code coloured."
+            case .xcode: "No colour on headings or emphasis; the table header carries it instead."
+            case .plain: "No colour except links. Headings differ by size only."
+            }
+        }
+    }
+
     enum Appearance {
         static let sizeKey = "bodySize"
         static let familyKey = "bodyFontFamily"
+        static let lookKey = "look"
         static let defaultSize: Double = 15
         static let sizeRange: ClosedRange<Double> = 11 ... 28
 
@@ -51,7 +89,14 @@ enum MarkdownStyle {
         static func reload() {
             MarkdownStyle.bodySize = storedSize()
             MarkdownStyle.bodyFamily = storedFamily()
+            MarkdownStyle.look = storedLook()
             NotificationCenter.default.post(name: didChange, object: nil)
+        }
+
+        static func storedLook() -> Look {
+            guard let raw = UserDefaults.standard.string(forKey: lookKey),
+                  let look = Look(rawValue: raw) else { return .markRead }
+            return look
         }
 
         /// The stored size, or the default when nothing is stored. Clamped, so a
@@ -77,6 +122,8 @@ enum MarkdownStyle {
     private(set) static var bodySize: CGFloat = Appearance.storedSize()
     /// Family the reader chose for body text, or nil for the system font.
     private(set) static var bodyFamily: String? = Appearance.storedFamily()
+    /// Which of the three looks is on.
+    private(set) static var look: Look = Appearance.storedLook()
 
     /// The reading face at an arbitrary size: the one place that knows whether
     /// that is the system font or a family from Settings.
@@ -95,13 +142,23 @@ enum MarkdownStyle {
 
     static var body: NSFont { bodyFont(ofSize: bodySize) }
     /// Code, table rows and front matter stay on the system monospaced face
-    /// whatever the reader picked for the text: table columns are padded in
-    /// whole monospaced advances, and a proportional face there takes the
-    /// alignment with it.
+    /// whatever the reader picked for the text.
+    ///
+    /// Not because of `monoAdvance` below — nothing emits `.tableCellPad`, so
+    /// that branch is dormant. The reason is plainer: a markdown table shown as
+    /// raw text is *hand-aligned* text, and hand-aligned columns only line up in
+    /// a fixed-pitch face. Code stops reading as code in a proportional one.
+    /// A different *monospaced* family here would be fine; a proportional one
+    /// would not.
     static var mono: NSFont { .monospacedSystemFont(ofSize: bodySize - 1, weight: .regular) }
 
-    /// Width of one monospaced character. Table padding is expressed in these,
-    /// so the scanner can stay free of AppKit.
+    /// Width of one monospaced character, for `.tableCellPad`.
+    ///
+    /// 🔴 Dormant: nothing produces that decoration. Aligning columns by kerning
+    /// was measured and abandoned — it works on a narrow table and is *worse
+    /// than nothing* on a wide one, where the padded rows wrap and the columns
+    /// land somewhere different on each wrapped line. Kept as the record of a
+    /// road already walked; do not wire it back up.
     static var monoAdvance: CGFloat { ("0" as NSString).size(withAttributes: [.font: mono]).width }
 
     static func heading(_ level: Int) -> NSFont {
@@ -128,13 +185,56 @@ enum MarkdownStyle {
     /// same `labelColor` as the paragraph around them, which is what made a
     /// document look flat next to an editor that colours its markup. One place
     /// to change them.
+    /// Every colour this program invents, in one place, per `Look`. A `nil`
+    /// means "leave whatever colour the text already had", which is not the same
+    /// as painting it `labelColor`: a link inside that run keeps its own.
     enum Palette {
-        /// Every heading level. Follows the system accent rather than fixing a
-        /// hue that would clash with somebody else's.
-        static var heading: NSColor { .controlAccentColor }
+        /// Every heading level. Where it follows the accent it does so rather
+        /// than fixing a hue that would clash with somebody else's.
+        static var heading: NSColor {
+            switch look {
+            case .markRead: .controlAccentColor
+            case .xcode, .plain: .labelColor
+            }
+        }
         /// Inline code and fenced blocks. The background tint alone is easy to
         /// miss on a busy line.
-        static var code: NSColor { .systemPink }
+        static var code: NSColor? {
+            switch look {
+            case .markRead: .systemPink
+            case .xcode: .systemPink
+            case .plain: nil
+            }
+        }
+        /// Bold and italic. Quieter than the heading accent on purpose — a page
+        /// where every emphasised word shouts reads worse than a flat one.
+        static var emphasis: NSColor? {
+            switch look {
+            case .markRead: .systemIndigo
+            case .xcode, .plain: nil
+            }
+        }
+        /// A table row *as raw markdown*, which is the only state this colour is
+        /// ever seen in: the drawn table puts its cells back to `labelColor`,
+        /// because a whole table tinted in one hue reads as faded rather than as
+        /// a table. See `MarkdownTableRenderer.useBodyColour`.
+        static var tableRow: NSColor? {
+            switch look {
+            case .markRead: .systemTeal
+            case .xcode, .plain: nil
+            }
+        }
+        /// The header row of a *drawn* table — the one thing Xcode colours and
+        /// MarkRead did not.
+        static var tableHeader: NSColor? {
+            switch look {
+            case .markRead: nil
+            case .xcode: .systemPink
+            case .plain: nil
+            }
+        }
+        /// Whether a drawn table's header row is set in bold.
+        static var tableHeaderIsBold: Bool { look != .markRead }
     }
 
     // MARK: - Paragraph
@@ -180,11 +280,11 @@ enum MarkdownStyle {
                 ], range: r)
 
             case .bold:
-                addTrait(.bold, storage, r)
+                addTrait(.bold, storage, r, colour: Palette.emphasis)
             case .italic:
-                addTrait(.italic, storage, r)
+                addTrait(.italic, storage, r, colour: Palette.emphasis)
             case .boldItalic:
-                addTrait([.bold, .italic], storage, r)
+                addTrait([.bold, .italic], storage, r, colour: Palette.emphasis)
 
             case .strikethrough:
                 storage.addAttributes([
@@ -198,7 +298,7 @@ enum MarkdownStyle {
             case .code:
                 storage.addAttributes([
                     .font: mono,
-                    .foregroundColor: Palette.code,
+                    .foregroundColor: Palette.code ?? NSColor.labelColor,
                     .backgroundColor: NSColor.quaternarySystemFill,
                     .markReadCode: true,
                 ], range: r)
@@ -246,6 +346,7 @@ enum MarkdownStyle {
 
             case .tableRow:
                 storage.addAttribute(.font, value: mono, range: r)
+                if let colour = Palette.tableRow { paintIfPlain(colour, storage, r) }
 
             case .tableCellPad(let units):
                 storage.addAttribute(.kern, value: CGFloat(units) * monoAdvance, range: r)
@@ -257,10 +358,31 @@ enum MarkdownStyle {
     }
 
     private static func addTrait(_ traits: NSFontDescriptor.SymbolicTraits,
-                                 _ storage: NSTextStorage, _ range: NSRange) {
+                                 _ storage: NSTextStorage, _ range: NSRange,
+                                 colour: NSColor? = nil) {
         storage.enumerateAttribute(.font, in: range) { value, subrange, _ in
             let current = value as? NSFont ?? body
             storage.addAttribute(.font, value: adding(traits, to: current), range: subrange)
+        }
+        if let colour { paintIfPlain(colour, storage, range) }
+    }
+
+    /// Colours only the part of `range` that is still plain body text.
+    ///
+    /// Deliberately not private: the table renderer paints a drawn header row by
+    /// the same rule, so that code or a link inside a header cell keeps its own
+    /// colour.
+    ///
+    /// This is the whole reason emphasis can be coloured at all. A bold word
+    /// *inside a heading* already carries the heading's colour by the time this
+    /// runs, and painting over it would strip the heading's own colour off
+    /// exactly one word — which is why bold and italic were left grey when the
+    /// headings first got theirs. Same for a bold link, and for code or a link
+    /// sitting in a table row.
+    static func paintIfPlain(_ colour: NSColor, _ storage: NSMutableAttributedString, _ range: NSRange) {
+        storage.enumerateAttribute(.foregroundColor, in: range) { value, subrange, _ in
+            guard value as? NSColor == NSColor.labelColor else { return }
+            storage.addAttribute(.foregroundColor, value: colour, range: subrange)
         }
     }
 }
