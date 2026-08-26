@@ -31,9 +31,73 @@ enum MarkdownStyle {
 
     // MARK: - Fonts
 
-    static var bodySize: CGFloat = 15
+    /// What the reader picked in Settings, kept in `UserDefaults` and cached in
+    /// the two properties below.
+    ///
+    /// Cached on purpose rather than read on every access: `body`, `mono` and
+    /// `heading` are asked for once per decoration, which on a long note is
+    /// thousands of times per keystroke.
+    enum Appearance {
+        static let sizeKey = "bodySize"
+        static let familyKey = "bodyFontFamily"
+        static let defaultSize: Double = 15
+        static let sizeRange: ClosedRange<Double> = 11 ... 28
 
-    static var body: NSFont { .systemFont(ofSize: bodySize) }
+        /// Posted when either setting changes. The open editor listens, because
+        /// every column width and every laid-out table it holds was measured for
+        /// the font that has just been replaced.
+        static let didChange = Notification.Name("MarkReadAppearanceDidChange")
+
+        static func reload() {
+            MarkdownStyle.bodySize = storedSize()
+            MarkdownStyle.bodyFamily = storedFamily()
+            NotificationCenter.default.post(name: didChange, object: nil)
+        }
+
+        /// The stored size, or the default when nothing is stored. Clamped, so a
+        /// value written into the plist by hand cannot leave the app unreadable.
+        static func storedSize() -> CGFloat {
+            let stored = UserDefaults.standard.double(forKey: sizeKey)
+            guard stored > 0 else { return CGFloat(defaultSize) }
+            return CGFloat(min(max(stored, sizeRange.lowerBound), sizeRange.upperBound))
+        }
+
+        /// The stored family, or nil for the system font. A family that has been
+        /// uninstalled since it was chosen counts as nil rather than as a font
+        /// that cannot be built.
+        static func storedFamily() -> String? {
+            guard let name = UserDefaults.standard.string(forKey: familyKey), !name.isEmpty,
+                  NSFont(descriptor: NSFontDescriptor(fontAttributes: [.family: name]), size: 12) != nil
+            else { return nil }
+            return name
+        }
+    }
+
+    /// Body text size in points. Not a constant since 0.2.2 — Settings writes it.
+    private(set) static var bodySize: CGFloat = Appearance.storedSize()
+    /// Family the reader chose for body text, or nil for the system font.
+    private(set) static var bodyFamily: String? = Appearance.storedFamily()
+
+    /// The reading face at an arbitrary size: the one place that knows whether
+    /// that is the system font or a family from Settings.
+    static func bodyFont(ofSize size: CGFloat, weight: NSFont.Weight = .regular) -> NSFont {
+        guard let bodyFamily else { return .systemFont(ofSize: size, weight: weight) }
+        var descriptor = NSFontDescriptor(fontAttributes: [.family: bodyFamily])
+        if weight != .regular {
+            // Asked for by weight rather than by unioning symbolic traits: a
+            // wholesale trait copy drags `.monoSpace` along with it and the
+            // substitution silently does nothing.
+            descriptor = descriptor.addingAttributes(
+                [.traits: [NSFontDescriptor.TraitKey.weight: weight]])
+        }
+        return NSFont(descriptor: descriptor, size: size) ?? .systemFont(ofSize: size, weight: weight)
+    }
+
+    static var body: NSFont { bodyFont(ofSize: bodySize) }
+    /// Code, table rows and front matter stay on the system monospaced face
+    /// whatever the reader picked for the text: table columns are padded in
+    /// whole monospaced advances, and a proportional face there takes the
+    /// alignment with it.
     static var mono: NSFont { .monospacedSystemFont(ofSize: bodySize - 1, weight: .regular) }
 
     /// Width of one monospaced character. Table padding is expressed in these,
@@ -48,7 +112,7 @@ enum MarkdownStyle {
         case 4: 1.14
         default: 1.05
         }
-        return .systemFont(ofSize: (bodySize * scale).rounded(), weight: .bold)
+        return bodyFont(ofSize: (bodySize * scale).rounded(), weight: .bold)
     }
 
     /// Adds a trait to whatever font a range already has, so that bold inside a

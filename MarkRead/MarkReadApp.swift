@@ -13,11 +13,24 @@ struct MarkReadApp: App {
         }
         .defaultSize(width: 1000, height: 720)
         .commands { menus }
+
+        // Settings, and with it the ⌘, the system puts in the app menu.
+        Settings {
+            SettingsView()
+        }
     }
 
     @CommandsBuilder
     private var menus: some Commands {
         CommandGroup(replacing: .newItem) {
+            // New used to be replaced outright by Open, so ⌘N did nothing at
+            // all. The panel picks the name and the place, the file is created
+            // empty, and from there it is an ordinary open.
+            Button("New Note") { app.newNote() }
+                .keyboardShortcut("n")
+
+            Divider()
+
             Button("Open…") { app.openPanel() }
                 .keyboardShortcut("o")
             Button("Open Folder…") { app.chooseFolder() }

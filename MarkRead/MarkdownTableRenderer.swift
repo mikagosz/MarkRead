@@ -118,7 +118,7 @@ final class TableLayout {
             // back to a monospaced face — the swap then does nothing at all,
             // which is exactly what it did the first time round.
             let traits = font.fontDescriptor.symbolicTraits.intersection([.bold, .italic])
-            let descriptor = NSFont.systemFont(ofSize: MarkdownStyle.bodySize - 1).fontDescriptor
+            let descriptor = MarkdownStyle.bodyFont(ofSize: MarkdownStyle.bodySize - 1).fontDescriptor
                 .withSymbolicTraits(traits)
             if let swapped = NSFont(descriptor: descriptor, size: MarkdownStyle.bodySize - 1) {
                 text.addAttribute(.font, value: swapped, range: range)
@@ -132,9 +132,19 @@ final class TableLayout {
         text.addAttribute(.paragraphStyle, value: paragraph, range: whole)
     }
 
+    /// Drops the spaces a table author put around a cell's text.
+    ///
+    /// Counted first and deleted once. Asking `text.string` from inside the loop
+    /// built the whole cell again for every single space it took off.
     private static func trim(_ text: NSMutableAttributedString) {
-        while text.length > 0, text.string.hasPrefix(" ") { text.deleteCharacters(in: NSRange(location: 0, length: 1)) }
-        while text.length > 0, text.string.hasSuffix(" ") { text.deleteCharacters(in: NSRange(location: text.length - 1, length: 1)) }
+        let string = text.string as NSString
+        let space: unichar = 32
+        var start = 0
+        var end = string.length
+        while start < end, string.character(at: start) == space { start += 1 }
+        while end > start, string.character(at: end - 1) == space { end -= 1 }
+        if end < string.length { text.deleteCharacters(in: NSRange(location: end, length: string.length - end)) }
+        if start > 0 { text.deleteCharacters(in: NSRange(location: 0, length: start)) }
     }
 
     // MARK: - Measuring

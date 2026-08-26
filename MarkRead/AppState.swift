@@ -80,6 +80,39 @@ final class AppState {
         folder.open(url)
     }
 
+    /// Makes an empty note and opens it.
+    ///
+    /// The file exists on disk before a single character is typed into it, and
+    /// that is deliberate: the whole app rests on "the buffer is the file". A
+    /// document with no `url` would take saving, conflict detection and
+    /// reloading with it.
+    func newNote() {
+        // Asked here rather than left to `openFile`: refusing down there would
+        // leave a new empty file on disk that nobody asked for.
+        if let current = document, current.isDirty {
+            alert = Alert(title: "Unsaved changes",
+                          detail: "Save or revert \(current.displayName) before starting a new note.")
+            return
+        }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = Self.markdownTypes
+        panel.nameFieldStringValue = "Untitled.md"
+        panel.message = "Where should the new note go?"
+        // The folder in the sidebar first, then the folder of the note on screen.
+        panel.directoryURL = folder.root ?? document?.url.deletingLastPathComponent()
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            // The panel has already asked about replacing an existing file;
+            // asking a second time here would not make the answer any truer.
+            try Data().write(to: url)
+        } catch {
+            alert = Alert(title: "Could not create", detail: error.localizedDescription)
+            return
+        }
+        openFile(url)
+        folder.noteCreated(url)
+    }
+
     /// Routes a file or folder to the right place. Called from the Open panel,
     /// from the sidebar, and from Finder via the app delegate.
     func open(_ url: URL) {

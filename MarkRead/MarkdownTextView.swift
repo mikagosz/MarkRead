@@ -275,6 +275,14 @@ struct MarkdownEditor: NSViewRepresentable {
             MainActor.assumeIsolated { coordinator?.highlightVisible() }
         }
 
+        context.coordinator.appearanceObserver = NotificationCenter.default.addObserver(
+            forName: MarkdownStyle.Appearance.didChange,
+            object: nil,
+            queue: .main
+        ) { [weak coordinator = context.coordinator] _ in
+            MainActor.assumeIsolated { coordinator?.restyleForAppearance() }
+        }
+
         context.coordinator.replaceText(text)
         return scrollView
     }
@@ -292,7 +300,8 @@ struct MarkdownEditor: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
-        for observer in [coordinator.scrollObserver, coordinator.frameObserver].compactMap({ $0 }) {
+        for observer in [coordinator.scrollObserver, coordinator.frameObserver,
+                         coordinator.appearanceObserver].compactMap({ $0 }) {
             NotificationCenter.default.removeObserver(observer)
         }
     }
@@ -315,6 +324,7 @@ struct MarkdownEditor: NSViewRepresentable {
         weak var scrollView: NSScrollView?
         var scrollObserver: NSObjectProtocol?
         var frameObserver: NSObjectProtocol?
+        var appearanceObserver: NSObjectProtocol?
 
         private var map = BlockMap(lines: [], openFrontMatter: false)
         /// The document as an NSString, kept so glyph generation does not bridge
@@ -425,6 +435,28 @@ struct MarkdownEditor: NSViewRepresentable {
             textView.undoManager?.removeAllActions()
             rebuildMap()
             textView.scroll(.zero)
+            highlightVisible()
+        }
+
+        /// The reader changed the face or its size in Settings.
+        ///
+        /// Everything this coordinator holds was measured for the old font:
+        /// column widths, the laid-out tables, and the record of which lines are
+        /// already styled. The text itself does not change, so the block map and
+        /// the hidden ranges — both of them character positions — survive.
+        func restyleForAppearance() {
+            guard let textView, let storage = textView.textStorage else { return }
+            textView.typingAttributes = MarkdownStyle.baseAttributes
+            tableCache.removeAll(keepingCapacity: true)
+            tablesByLine.removeAll(keepingCapacity: true)
+            styledRange = nil
+            lineRectsKey = nil
+            // Restyling only the visible window would leave every line outside it
+            // in the old size until it was scrolled to. Putting the whole
+            // document back to plain body text first costs one pass and is the
+            // only thing here that touches lines nobody is looking at.
+            storage.setAttributes(MarkdownStyle.baseAttributes,
+                                  range: NSRange(location: 0, length: storage.length))
             highlightVisible()
         }
 
