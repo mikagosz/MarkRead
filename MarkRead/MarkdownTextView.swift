@@ -6,10 +6,16 @@ import SwiftUI
 @Observable
 final class EditorHandle {
     weak var textView: NSTextView?
+    #if DEBUG
     /// What the editor currently believes about itself, for the debug bridge.
     /// Rendering decisions are invisible from outside; this makes them answerable
     /// instead of guessable.
+    ///
+    /// DEBUG only. The bridge that reads it is plugged in locally for a
+    /// measurement and unplugged before a push, so in a shipping build this
+    /// closure was written on every launch and read by nothing.
     @ObservationIgnored var diagnostics: (() -> [String: Any])?
+    #endif
 }
 
 /// NSTextView that follows links on a plain click.
@@ -21,11 +27,21 @@ final class EditorHandle {
 final class LiveMarkdownTextView: NSTextView {
 
     var onLinkClick: ((URL) -> Void)?
+    /// The link under the pointer, or nil. Half of every `](…)` is deliberately
+    /// not drawn, so without this there is nothing on screen that says where a
+    /// link goes before it is clicked.
+    var onLinkHover: ((URL?) -> Void)?
+    /// A file dropped on the editor. Without an owner, AppKit treats it as text
+    /// and pastes its path into the open note.
+    var onFileDrop: ((URL) -> Void)?
     /// Draws rendered tables over the space their hidden source lines reserve.
     var drawTables: ((NSRect) -> Void)?
     /// Links inside a rendered table: its glyphs are suppressed, so the normal
     /// hit test has nothing to find there.
     var tableLink: ((NSPoint) -> URL?)?
+
+    private var hoverArea: NSTrackingArea?
+    private var hovered: URL?
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
@@ -33,12 +49,7 @@ final class LiveMarkdownTextView: NSTextView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        if !event.modifierFlags.contains(.option),
-           let url = tableLink?(convert(event.locationInWindow, from: nil)) {
-            onLinkClick?(url)
-            return
-        }
-        guard !event.modifierFlags.contains(.option), let url = link(at: event) else {
+        guard !event.modifierFlags.contains(.option), let url = target(of: event) else {
             super.mouseDown(with: event)
             return
         }
@@ -46,12 +57,86 @@ final class LiveMarkdownTextView: NSTextView {
     }
 
     override func cursorUpdate(with event: NSEvent) {
-        let point = convert(event.locationInWindow, from: nil)
-        if tableLink?(point) != nil || link(at: event) != nil {
+        if target(of: event) != nil {
             NSCursor.pointingHand.set()
         } else {
             super.cursorUpdate(with: event)
         }
+    }
+
+    // MARK: - Hovering
+
+    /// `cursorUpdate` alone is not enough to report a target: AppKit sends it
+    /// when the cursor rectangle changes, which says nothing about crossing from
+    /// one link to the next.
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(rect: .zero,
+                                  options: [.mouseMoved, .mouseEnteredAndExited,
+                                            .activeInKeyWindow, .inVisibleRect],
+                                  owner: self)
+        addTrackingArea(area)
+        hoverArea = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        report(hover: target(of: event))
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        report(hover: nil)
+    }
+
+    /// Whatever is clickable under the pointer: a link inside a rendered table
+    /// first, since its glyphs are suppressed and the normal hit test is blind
+    /// to them, then an ordinary link.
+    private func target(of event: NSEvent) -> URL? {
+        tableLink?(convert(event.locationInWindow, from: nil)) ?? link(at: event)
+    }
+
+    private func report(hover url: URL?) {
+        guard url != hovered else { return }
+        hovered = url
+        onLinkHover?(url)
+    }
+
+    // MARK: - Dropped files
+
+    // No `registerForDraggedTypes` call here on purpose: that method *replaces*
+    // the list, and NSTextView already registers nineteen types of its own,
+    // file URLs among them. The drop therefore arrives at this view either way —
+    // what was missing is an owner for it.
+
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        droppedFile(sender) != nil ? .copy : super.draggingEntered(sender)
+    }
+
+    override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        droppedFile(sender) != nil ? .copy : super.draggingUpdated(sender)
+    }
+
+    override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        droppedFile(sender) != nil ? true : super.prepareForDragOperation(sender)
+    }
+
+    /// Handled here and never handed to `super`. Measured: a note dropped on the
+    /// window inserted 121 characters of its own path into the *open* document
+    /// and left it dirty — one ⌘S from permanent litter in the user's file.
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        guard let url = droppedFile(sender) else { return super.performDragOperation(sender) }
+        report(hover: nil)
+        onFileDrop?(url)
+        return true
+    }
+
+    private func droppedFile(_ sender: any NSDraggingInfo) -> URL? {
+        sender.draggingPasteboard.readObjects(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]
+        )?.first as? URL
     }
 
     private func link(at event: NSEvent) -> URL? {
@@ -83,8 +168,23 @@ struct MarkdownEditor: NSViewRepresentable {
     @Binding var text: String
     let handle: EditorHandle
     let onLinkClick: (URL) -> Void
+    let onLinkHover: (URL?) -> Void
+    let onFileDrop: (URL) -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeCoordinator() -> Coordinator { Coordinator(handle: handle) }
+
+    /// Hands the view and its coordinator the closures of *this* struct value.
+    ///
+    /// Called from `makeNSView` and again from every `updateNSView`, because
+    /// SwiftUI builds a fresh `MarkdownEditor` — with a fresh binding — each time
+    /// the open document changes. Nothing here may be captured once and kept.
+    private func bind(_ coordinator: Coordinator, _ textView: LiveMarkdownTextView) {
+        let binding = $text
+        coordinator.onTextChange = { binding.wrappedValue = $0 }
+        textView.onLinkClick = onLinkClick
+        textView.onLinkHover = onLinkHover
+        textView.onFileDrop = onFileDrop
+    }
 
     func makeNSView(context: Context) -> NSScrollView {
         // TextKit 1, built explicitly. The highlighter needs an NSLayoutManager
@@ -102,7 +202,6 @@ struct MarkdownEditor: NSViewRepresentable {
 
         let textView = LiveMarkdownTextView(frame: .zero, textContainer: container)
         textView.delegate = context.coordinator
-        textView.onLinkClick = onLinkClick
         textView.isEditable = true
         textView.isSelectable = true
         textView.allowsUndo = true
@@ -145,6 +244,7 @@ struct MarkdownEditor: NSViewRepresentable {
 
         context.coordinator.textView = textView
         context.coordinator.scrollView = scrollView
+        bind(context.coordinator, textView)
         layout.delegate = context.coordinator
         textView.drawTables = { [weak coordinator = context.coordinator] rect in
             coordinator?.drawTables(in: rect)
@@ -181,7 +281,7 @@ struct MarkdownEditor: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = context.coordinator.textView else { return }
-        textView.onLinkClick = onLinkClick
+        bind(context.coordinator, textView)
         handle.textView = textView
         // Only when the document was swapped underneath us — echoing the user's
         // own keystrokes back into the storage would reset the caret on every
@@ -201,7 +301,16 @@ struct MarkdownEditor: NSViewRepresentable {
 
     @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate, NSLayoutManagerDelegate {
-        private let parent: MarkdownEditor
+        /// Writes the buffer back into the document that is on screen *now*.
+        ///
+        /// This used to be a stored copy of the `MarkdownEditor` struct, and that
+        /// copy carried a `@Binding` to whichever document was open when the
+        /// coordinator was built. `updateNSView` refreshed the link handler but
+        /// could not refresh a `let`, so after opening a second note every
+        /// keystroke was written into the *first* document: the visible one never
+        /// became dirty, ⌘S and the Save button stayed grey, and the text was
+        /// gone at the next click. Confirmed on the running app.
+        var onTextChange: (String) -> Void = { _ in }
         weak var textView: LiveMarkdownTextView?
         weak var scrollView: NSScrollView?
         var scrollObserver: NSObjectProtocol?
@@ -235,18 +344,30 @@ struct MarkdownEditor: NSViewRepresentable {
         /// Editor width the styled lines were laid out at. Column widths depend on
         /// it, so a change has to throw the record away — see `highlightVisible`.
         private var styledWidth: CGFloat = 0
+        /// Where each source line ended up, and the band it was measured for.
+        ///
+        /// Building this walks every laid-out fragment in an 800 px tall band.
+        /// Hovering and `cursorUpdate` ask for it on every mouse-moved event, so
+        /// it is kept until the layout changes (`didCompleteLayoutFor`) or the
+        /// view scrolls somewhere else.
+        private var lineRectsCache: [Int: CGRect] = [:]
+        private var lineRectsKey: CGRect?
+        #if DEBUG
         /// Counters for the debug bridge: how much work scrolling actually costs.
         private var styleRuns = 0
         private var styledLineCount = 0
         private var styleMillis = 0.0
         private var tablesBuilt = 0
+        #endif
 
-        init(_ parent: MarkdownEditor) {
-            self.parent = parent
+        init(handle: EditorHandle) {
             super.init()
-            parent.handle.diagnostics = { [weak self] in self?.report() ?? [:] }
+            #if DEBUG
+            handle.diagnostics = { [weak self] in self?.report() ?? [:] }
+            #endif
         }
 
+        #if DEBUG
         private func report() -> [String: Any] {
             [
                 "lines": map.lines.count,
@@ -282,10 +403,22 @@ struct MarkdownEditor: NSViewRepresentable {
                 "visibleHeight": scrollView?.contentView.bounds.height ?? -1,
             ]
         }
+        #endif
 
         /// Loads a different document into the view and highlights what shows.
         func replaceText(_ new: String) {
             guard let textView, let storage = textView.textStorage else { return }
+            // Everything derived from the outgoing text has to be gone *before*
+            // `endEditing()`, not two lines after it. AppKit trims the selection
+            // to the new length from inside that call and sends
+            // `textViewDidChangeSelection` there and then, which runs
+            // `updateRevealedLine` → `tableTouched` → `isTableRow` — all of them
+            // readers of this map. Measured four times on the running app: the
+            // map still described the longer previous document, the read went
+            // past the end of the new string, and the process died with an
+            // NSRangeException, taking the unsaved text with it. No window, no
+            // question, nothing on screen.
+            forgetTextState()
             storage.beginEditing()
             storage.replaceCharacters(in: NSRange(location: 0, length: storage.length), with: new)
             storage.endEditing()
@@ -297,7 +430,7 @@ struct MarkdownEditor: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             guard let textView else { return }
-            parent.text = textView.string
+            onTextChange(textView.string)
             rebuildMap()
             highlightVisible()
             // Otherwise the caret keeps whatever the character to its left had —
@@ -311,14 +444,27 @@ struct MarkdownEditor: NSViewRepresentable {
 
         private func rebuildMap() {
             guard let textView, let storage = textView.textStorage else { return }
+            forgetTextState()
             nsText = storage.string as NSString
             map = BlockMap.build(nsText)
+            updateRevealedLine()
+        }
+
+        /// Drops everything that describes the current text.
+        ///
+        /// Safe to call at any moment, including one where the storage is being
+        /// rewritten: an empty map and an empty string make every reader below
+        /// return "nothing here" instead of reading a range that no longer
+        /// exists. `rebuildMap` fills it all in again.
+        private func forgetTextState() {
+            map = BlockMap(lines: [], openFrontMatter: false)
+            nsText = ""
             hiddenByLine.removeAll(keepingCapacity: true)
             tablesByLine.removeAll(keepingCapacity: true)
             tableCache.removeAll(keepingCapacity: true)
             styledRange = nil
             revealedLine = nil
-            updateRevealedLine()
+            lineRectsKey = nil
         }
 
         // MARK: - Revealing the caret's line
@@ -473,12 +619,14 @@ struct MarkdownEditor: NSViewRepresentable {
 
         /// Everything the styling of one span of lines needs, done once.
         private func style(from firstLine: Int, to lastLine: Int) {
+            #if DEBUG
             let started = Date()
             defer {
                 styleRuns += 1
                 styledLineCount += max(0, lastLine - firstLine + 1)
                 styleMillis += Date().timeIntervalSince(started) * 1000
             }
+            #endif
             guard let textView,
                   let storage = textView.textStorage,
                   let layoutManager = textView.layoutManager,
@@ -518,6 +666,14 @@ struct MarkdownEditor: NSViewRepresentable {
             layoutManager.invalidateGlyphs(forCharacterRange: reset, changeInLength: 0,
                                            actualCharacterRange: nil)
             layoutManager.invalidateLayout(forCharacterRange: reset, actualCharacterRange: nil)
+            lineRectsKey = nil
+        }
+
+        /// Any relayout moves lines, so the measured rectangles are stale.
+        func layoutManager(_ layoutManager: NSLayoutManager,
+                           didCompleteLayoutFor textContainer: NSTextContainer?,
+                           atEnd layoutFinishedFlag: Bool) {
+            lineRectsKey = nil
         }
 
         // MARK: - Tables
@@ -561,7 +717,9 @@ struct MarkdownEditor: NSViewRepresentable {
                 } else if let built = TableLayout(storage: storage, map: map, lines: block,
                                                   hidden: hiddenByLine, width: available) {
                     tableCache[block.lowerBound] = built
+                    #if DEBUG
                     tablesBuilt += 1
+                    #endif
                     table = built
                 } else {
                     continue
@@ -582,7 +740,7 @@ struct MarkdownEditor: NSViewRepresentable {
 
                     // The whole line is drawn by the renderer, so none of its own
                     // glyphs may appear.
-                    hiddenByLine[row] = [range.withoutTrailingNewlines(in: nsText)]
+                    hiddenByLine[row] = [range.trimmedNewlines(in: nsText)]
                 }
             }
         }
@@ -597,17 +755,13 @@ struct MarkdownEditor: NSViewRepresentable {
                 - container.lineFragmentPadding * 2
         }
 
+        /// `line < map.lines.count` says nothing about how long the string is —
+        /// the map can outlive the text it describes by the width of one AppKit
+        /// notification. `MarkdownTables.isRow` clamps to what `nsText` really
+        /// holds, and is the only implementation of this test in the project.
         private func isTableRow(_ line: Int) -> Bool {
             guard line >= 0, line < map.lines.count, map.lines[line].kind == .normal else { return false }
-            let range = map.lines[line].range
-            var index = range.location
-            let end = NSMaxRange(range)
-            while index < end {
-                let char = nsText.character(at: index)
-                if char == 0x20 || char == 0x09 { index += 1; continue }
-                return char == 0x7C
-            }
-            return false
+            return MarkdownTables.isRow(nsText, map.lines[line].range)
         }
 
         /// Where each source line ended up, in view coordinates.
@@ -629,6 +783,7 @@ struct MarkdownEditor: NSViewRepresentable {
             let visible = (scrollView?.contentView.bounds ?? textView.visibleRect)
                 .offsetBy(dx: -origin.x, dy: -origin.y)
                 .insetBy(dx: 0, dy: -400)
+            if let lineRectsKey, lineRectsKey == visible { return lineRectsCache }
             let glyphRange = layoutManager.glyphRange(forBoundingRect: visible, in: container)
 
             var result: [Int: CGRect] = [:]
@@ -643,6 +798,8 @@ struct MarkdownEditor: NSViewRepresentable {
                     result[line] = rect.offsetBy(dx: origin.x, dy: origin.y)
                 }
             }
+            lineRectsCache = result
+            lineRectsKey = visible
             return result
         }
 
@@ -656,6 +813,9 @@ struct MarkdownEditor: NSViewRepresentable {
         }
 
         func tableLink(at point: NSPoint) -> URL? {
+            // Nothing drawn means nothing to hit, and this is asked on every
+            // mouse-moved event — same early exit as `drawTables`.
+            guard !tablesByLine.isEmpty else { return nil }
             let rects = lineRects()
             for (line, table) in tablesByLine {
                 guard let rect = rects[line], rect.contains(point) else { continue }
@@ -667,14 +827,5 @@ struct MarkdownEditor: NSViewRepresentable {
     }
 }
 
-nonisolated private extension NSRange {
-    func withoutTrailingNewlines(in text: NSString) -> NSRange {
-        var result = self
-        while result.length > 0 {
-            let last = text.character(at: NSMaxRange(result) - 1)
-            guard last == 10 || last == 13 else { break }
-            result.length -= 1
-        }
-        return result
-    }
-}
+// `NSRange.trimmedNewlines(in:)` lives in MarkdownTables.swift — this file used
+// to carry a second copy of it under a different name.

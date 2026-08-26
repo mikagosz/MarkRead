@@ -22,6 +22,11 @@ struct MarkReadApp: App {
                 .keyboardShortcut("o")
             Button("Open Folder…") { app.chooseFolder() }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
+            // `FolderIndex.clear()` existed from the start and was called from
+            // nowhere: a folder could be swapped for another one but never let
+            // go of. Here is the way out of folder mode.
+            Button("Close Folder") { app.closeFolder() }
+                .disabled(app.folder.root == nil)
         }
 
         CommandGroup(replacing: .saveItem) {

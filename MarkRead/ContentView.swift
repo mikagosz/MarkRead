@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct ContentView: View {
@@ -22,6 +23,23 @@ struct ContentView: View {
                     message: Text(alert.detail),
                     primaryButton: .destructive(Text("Overwrite")) { app.saveOverwriting() },
                     secondaryButton: .cancel(Text("Reload")) { app.reloadFromDisk() }
+                )
+            case .confirmOpen(let url):
+                // The whole target is in `detail`, which is the point: this is a
+                // scheme the app does not know, in a note the user may not have
+                // written.
+                return Alert(
+                    title: Text(alert.title),
+                    message: Text(alert.detail),
+                    primaryButton: .default(Text("Open")) { NSWorkspace.shared.open(url) },
+                    secondaryButton: .cancel()
+                )
+            case .encodingChange:
+                return Alert(
+                    title: Text(alert.title),
+                    message: Text(alert.detail),
+                    primaryButton: .default(Text("Save as UTF-8")) { app.saveAsUTF8() },
+                    secondaryButton: .cancel()
                 )
             }
         }
@@ -65,13 +83,7 @@ private struct Sidebar: View {
             }
 
             if app.folder.root == nil {
-                ContentUnavailableView {
-                    Label("No folder", systemImage: "folder")
-                } description: {
-                    Text("Choose a folder to list its notes.")
-                } actions: {
-                    Button("Choose Folder…") { app.chooseFolder() }
-                }
+                withoutFolder
             } else {
                 List(selection: selection) {
                     ForEach(app.folder.filtered) { entry in
@@ -95,6 +107,10 @@ private struct Sidebar: View {
                 HStack(spacing: 6) {
                     Image(systemName: "folder")
                     Text(root.lastPathComponent).lineLimit(1).truncationMode(.head)
+                    if app.folder.truncated {
+                        Image(systemName: "exclamationmark.triangle")
+                            .help("This folder goes deeper or holds more notes than the list shows.")
+                    }
                     Spacer()
                     Button {
                         app.chooseFolder()
@@ -103,6 +119,13 @@ private struct Sidebar: View {
                     }
                     .buttonStyle(.borderless)
                     .help("Choose a different folder")
+                    Button {
+                        app.closeFolder()
+                    } label: {
+                        Image(systemName: "xmark.circle")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Close this folder")
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -110,6 +133,57 @@ private struct Sidebar: View {
                 .padding(.vertical, 6)
                 .background(.bar)
             }
+        }
+    }
+
+    /// No folder chosen: the note that is open, and the ones opened before it.
+    ///
+    /// This is not "nothing to show". Opening a single note used to index that
+    /// note's own directory, which on a Desktop meant 114 files out of two
+    /// unrelated vaults, flat, with no way to close the folder again. The list
+    /// of recent documents was already being written to disk with nowhere to
+    /// appear; here is where it appears.
+    @ViewBuilder
+    private var withoutFolder: some View {
+        if app.document == nil, app.recents.isEmpty {
+            ContentUnavailableView {
+                Label("No notes yet", systemImage: "doc.text")
+            } description: {
+                Text("Open a note, or choose a folder to list one.")
+            } actions: {
+                Button("Open…") { app.openPanel() }
+                Button("Choose Folder…") { app.chooseFolder() }
+            }
+        } else {
+            List(selection: selection) {
+                if let document = app.document {
+                    Section("Open") {
+                        Text(document.displayName)
+                            .lineLimit(1)
+                            .tag(document.url)
+                    }
+                }
+                let earlier = app.recents.filter { $0 != app.document?.url }
+                if !earlier.isEmpty {
+                    Section("Recent") {
+                        ForEach(earlier, id: \.self) { url in
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(url.deletingPathExtension().lastPathComponent)
+                                    .lineLimit(1)
+                                Text((url.deletingLastPathComponent().path as NSString)
+                                    .abbreviatingWithTildeInPath)
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                                    .lineLimit(1)
+                                    .truncationMode(.head)
+                            }
+                            .padding(.vertical, 1)
+                            .tag(url)
+                        }
+                    }
+                }
+            }
+            .listStyle(.sidebar)
         }
     }
 
@@ -162,6 +236,13 @@ private struct Detail: View {
                 Button("Open…") { app.openPanel() }
                     .keyboardShortcut("o")
             }
+            // A note dropped on the window with nothing open yet. The editor
+            // handles the same drop once a document is on screen.
+            .dropDestination(for: URL.self) { urls, _ in
+                guard let first = urls.first else { return false }
+                app.open(first)
+                return true
+            }
         }
     }
 
@@ -169,8 +250,27 @@ private struct Detail: View {
         MarkdownEditor(
             text: Bindable(document).text,
             handle: app.editor,
-            onLinkClick: { app.follow($0) }
+            onLinkClick: { app.follow($0) },
+            onLinkHover: { app.hoverLink($0) },
+            onFileDrop: { app.open($0) }
         )
+        // Where a link goes, before it is clicked. Sits over the text rather
+        // than under it: a bar that appears and disappears in the layout would
+        // shift the line the reader is on.
+        .overlay(alignment: .bottomLeading) {
+            if let target = app.hoveredLink {
+                Text(target)
+                    .font(.caption)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(.bar, in: .rect(cornerRadius: 6))
+                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.quaternary))
+                    .padding(10)
+                    .allowsHitTesting(false)
+            }
+        }
         .toolbar {
             // Nothing in the middle of the toolbar: the window title on the left
             // already says which file this is, and a second copy of the name in a

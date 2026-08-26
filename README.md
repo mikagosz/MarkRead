@@ -36,16 +36,47 @@ at all: in a real note the URLs are longer than the rows they belong to.
 - Live preview in one column: headings, emphasis, code, tables, task lists,
   block quotes and Obsidian callouts are styled where they sit.
 - **Working links.** Named links, bare URLs, relative paths and `[[Wiki Links]]`
-  are all clickable. A wiki link resolves against the folder in the sidebar;
-  a relative path resolves against the file you are reading. Option-click places
-  the caret instead, for editing link text.
-- A sidebar listing every note under a chosen folder, with a filter field.
+  are all clickable. A wiki link resolves against the folder in the sidebar, or
+  against the note's own folder when no folder is open; a relative path resolves
+  against the file you are reading. Option-click places the caret instead, for
+  editing link text. Where a link goes is shown at the bottom of the window while
+  the pointer is over it — necessary, because the `](…)` half is not drawn.
+- A sidebar listing every note under a chosen folder, with a filter field, and
+  "Close Folder" to let go of it again. With no folder open the list shows the
+  note you have open and the ones you opened before it.
+- Drop a `.md` file on the window to open it.
 - Editing commands under the Format menu: bold, italic, strikethrough,
   highlight, inline code, headings 1–3, lists, tasks, quotes, code blocks, links.
 - Save refuses to run when the file changed on disk since it was opened, and
   offers to overwrite or reload.
+- Saving preserves the file's extended attributes — Finder tags, Spotlight
+  comments — which an atomic write drops by default, and does nothing at all when
+  there is nothing to save.
 - macOS text substitutions (smart quotes, em dashes, auto-correct) are switched
   off. In a markdown file those are data loss.
+
+## Installing
+
+There is no installer and no signed release: build it and copy it.
+
+1. Open `MarkRead.xcodeproj` in Xcode and build (⌘B). The app lands in
+   `~/Library/Developer/Xcode/DerivedData/…/Build/Products/`.
+2. Copy `MarkRead.app` to `/Applications`. Running it from DerivedData works, but
+   the copy is what survives a clean build.
+3. To open every `.md` with it: select a file in Finder, ⌘I, "Open with" →
+   MarkRead → "Change All…". MarkRead declares itself an *alternate* handler for
+   `.md` (`LSHandlerRank = Alternate`), so it never takes the extension over on
+   its own.
+
+To uninstall, delete the app. Two small files stay behind on disk:
+
+```
+~/Library/Preferences/com.mikagosz.MarkRead.plist
+~/Library/Application Support/com.apple.sharedfilelist/…/com.mikagosz.markread.sfl4
+```
+
+The first is window geometry and sidebar state, the second is the list of
+recently opened documents. Neither holds anything else.
 
 ## Layout
 
@@ -64,10 +95,11 @@ at all: in a real note the URLs are longer than the rows they belong to.
 
 ## Tests
 
-Headless, no frameworks, no fixtures. Both run in under a second.
+Headless, no frameworks, no fixtures. All three run in under a second.
 
 ```sh
 swiftc -parse-as-library MarkRead/MarkdownSyntax.swift MarkRead/MarkdownScanner.swift \
+       MarkRead/MarkdownTables.swift \
        Tests/scanner-check.swift -o /tmp/scanner-check && /tmp/scanner-check
 
 swiftc -parse-as-library -swift-version 6 -default-isolation MainActor \
@@ -81,6 +113,39 @@ underneath them:
 ```sh
 /tmp/document-check ~/Documents/SomeVault
 ```
+
+The third checks what a click on a link is allowed to do:
+
+```sh
+swiftc -parse-as-library -swift-version 6 -default-isolation MainActor \
+       MarkRead/AppState.swift MarkRead/MarkdownDocument.swift MarkRead/FolderIndex.swift \
+       MarkRead/MarkdownStyle.swift MarkRead/MarkdownSyntax.swift MarkRead/MarkdownScanner.swift \
+       MarkRead/MarkdownTables.swift MarkRead/MarkdownTableRenderer.swift \
+       MarkRead/MarkdownTextView.swift MarkRead/EditorActions.swift \
+       Tests/links-check.swift -o /tmp/links-check && /tmp/links-check
+```
+
+### The oracle
+
+`Tests/Oracle` is a separate Swift package that checks this project's line
+scanner against [swift-markdown](https://github.com/swiftlang/swift-markdown) —
+the parser Xcode and DocC use — over a corpus of real notes:
+
+```sh
+cd Tests/Oracle
+swift run -c release oracle ~/Documents/SomeVault
+```
+
+It prints, per construct, how many spans cmark found, how many this scanner
+agrees with, and the percentage; a construct falling below its recorded threshold
+exits non-zero. The thresholds are **not** 100%, on purpose. The scanner is
+line-local by design — that is what keeps re-highlighting inside a frame budget
+on a 200 000-character note — so emphasis spanning several lines is the largest
+known gap. The oracle exists to notice a *drop*, not to demand a parser this
+program deliberately does not have.
+
+It is a separate package so that swift-markdown never becomes a dependency of the
+app itself.
 
 ## Performance
 
@@ -134,25 +199,48 @@ rebuilds text from the AST on the way out, which would rewrite indentation, blan
 lines and list markers on a plain open-and-save — the exact failure this program
 exists to avoid.
 
-Where it would earn its place is as an *oracle in the tests*: parse a corpus with
-swift-markdown and check that this scanner agrees about where the blocks and
-inline spans are. That does not touch the fast path and would catch the edge
-cases a line scanner gets wrong (reference links, lazy continuation, nested
-emphasis).
+Where it earns its place is as an *oracle in the tests*, and that is where it
+lives: `Tests/Oracle` parses a corpus with swift-markdown and checks that this
+scanner agrees about where the blocks and inline spans are. That does not touch
+the fast path, and it catches the edge cases a line scanner gets wrong (reference
+links, lazy continuation, nested emphasis). See "The oracle" above for how to run
+it and what its thresholds mean.
 
 ## Requirements
 
 macOS 26 or later. Built with Xcode 27 and Swift 6.
 
-## Privacy
+## Privacy and what a click can do
 
-MarkRead does not connect to the network. It reads and writes the Markdown files
-you point it at, and nothing else. Following a link hands the URL to your default
-browser; that is the only thing that leaves the app.
+MarkRead does not connect to the network: there is no `URLSession` in it and
+nothing is sent anywhere. It reads and writes the Markdown files you point it at,
+plus the two files listed under "Installing".
+
+Following a link is the one thing that reaches outside the app, and a note is a
+document that can come from anyone, so it is worth being exact about it:
+
+| What you click | What happens |
+|---|---|
+| `http`, `https`, `mailto`, `obsidian` | handed to your default handler |
+| any other scheme (`vnc:`, `x-apple-helpbook:`, …) | you are asked first, with the full target shown |
+| a Markdown file | opened in MarkRead |
+| another document — image, PDF, text, audio, video, spreadsheet, presentation | opened with its default app |
+| anything else, including apps, scripts, executables, bundles and file types not listed above | **revealed in Finder, never launched** |
+
+The last row is the point. `NSWorkspace.open` on a `.app`, a `.command` or a
+plain file with the executable bit set *runs* it, and the target is not visible in
+a rendered document until you hover it. Deciding by content type rather than by a
+list of dangerous extensions means a type nobody thought of lands on the safe side
+by default.
 
 ## Licence
 
 The MIT licence in [LICENSE](LICENSE) covers the source code.
+
+The app has no third-party dependencies. The test oracle depends on
+[swift-markdown](https://github.com/swiftlang/swift-markdown), which is licensed
+under Apache 2.0 with a Runtime Library Exception; it is pinned to a release and
+is not linked into the application.
 
 It does **not** cover the application artwork in `MarkRead/markread icon.icon`,
 which is Copyright (c) 2026 mikagosz, all rights reserved. See [NOTICE](NOTICE).

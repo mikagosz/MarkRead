@@ -14,7 +14,11 @@ let package = Package(
     name: "oracle",
     platforms: [.macOS(.v14)],
     dependencies: [
-        .package(url: "https://github.com/swiftlang/swift-markdown.git", branch: "main"),
+        // Pinned to a release, not to somebody else's main branch. Package.resolved
+        // kept the build repeatable, but the first `swift package update` would
+        // have pulled in whatever had landed upstream that day.
+        .package(url: "https://github.com/swiftlang/swift-markdown.git",
+                 .upToNextMinor(from: "0.8.0")),
     ],
     targets: [
         .executableTarget(

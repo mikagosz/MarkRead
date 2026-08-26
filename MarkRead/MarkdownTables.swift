@@ -29,13 +29,13 @@ nonisolated enum MarkdownTables {
         var out: [Decoration] = []
         var index = lines.lowerBound
         while index < lines.upperBound {
-            guard index < map.lines.count, isTableRow(text, map.lines[index]) else {
+            guard index < map.lines.count, isRow(text, map.lines[index]) else {
                 index += 1
                 continue
             }
             var last = index
             while last + 1 < min(lines.upperBound, map.lines.count),
-                  isTableRow(text, map.lines[last + 1]) {
+                  isRow(text, map.lines[last + 1]) {
                 last += 1
             }
             align(rows: index ... last, text: text, map: map, hidden: hidden, into: &out)
@@ -45,22 +45,49 @@ nonisolated enum MarkdownTables {
     }
 
     // MARK: - Detection
+    //
+    // The one implementation of "what is a table row, and where are its cells".
+    // It used to exist three times over — here, in the editor's coordinator and
+    // in the renderer — with three different ways of asking the same question.
+    // They agreed, and nothing made them agree; a fix in one was a silent
+    // disagreement with the other two.
 
-    private static func isTableRow(_ text: NSString, _ line: (range: NSRange, kind: BlockMap.Kind)) -> Bool {
-        guard line.kind == .normal else { return false }
-        return text.substring(with: line.range)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .hasPrefix("|")
+    /// True when the first non-blank character of the line is `|`.
+    ///
+    /// Character by character, without building a string: the editor asks this
+    /// for every visible line on every keystroke.
+    static func isRow(_ text: NSString, _ range: NSRange) -> Bool {
+        // Clamped on purpose. A caller can hold a line map built for a longer
+        // text than the storage currently has — that is exactly how the editor
+        // used to read past the end of the string and take the process with it.
+        let safe = NSIntersectionRange(range, NSRange(location: 0, length: text.length))
+        var index = safe.location
+        let end = NSMaxRange(safe)
+        while index < end {
+            let char = text.character(at: index)
+            if char == 0x20 || char == 0x09 { index += 1; continue }   // space, tab
+            return char == 0x7C                                        // |
+        }
+        return false
+    }
+
+    static func isRow(_ text: NSString, _ line: (range: NSRange, kind: BlockMap.Kind)) -> Bool {
+        line.kind == .normal && isRow(text, line.range)
     }
 
     /// `| --- | :--: |` — the row that only says where the header ends.
-    private static func isDelimiter(_ cells: [NSRange], _ text: NSString) -> Bool {
+    static func isDelimiter(_ cells: [NSRange], _ text: NSString) -> Bool {
         guard !cells.isEmpty else { return false }
         return cells.allSatisfy { cell in
             let body = text.substring(with: cell).trimmingCharacters(in: .whitespaces)
             guard !body.isEmpty else { return false }
             return body.allSatisfy { $0 == "-" || $0 == ":" }
         }
+    }
+
+    /// The ranges between the unescaped pipes of one line.
+    static func cellRanges(_ text: NSString, _ line: NSRange) -> [NSRange] {
+        split(text, line).1
     }
 
     // MARK: - One table
@@ -104,7 +131,7 @@ nonisolated enum MarkdownTables {
     }
 
     /// Positions of the unescaped `|` in a line, and the ranges between them.
-    private static func split(_ text: NSString, _ line: NSRange) -> ([Int], [NSRange]) {
+    static func split(_ text: NSString, _ line: NSRange) -> ([Int], [NSRange]) {
         var pipes: [Int] = []
         var index = line.location
         let end = NSMaxRange(line)
@@ -137,8 +164,10 @@ nonisolated enum MarkdownTables {
     }
 }
 
-nonisolated private extension NSRange {
+nonisolated extension NSRange {
     /// The range without its trailing line terminator.
+    ///
+    /// Shared: the editor had its own copy of this under a different name.
     func trimmedNewlines(in text: NSString) -> NSRange {
         var result = self
         while result.length > 0 {

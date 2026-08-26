@@ -58,6 +58,21 @@ enum MarkdownStyle {
         return NSFont(descriptor: descriptor, size: font.pointSize) ?? font
     }
 
+    // MARK: - Colours
+
+    /// Headings and code used to carry no colour at all: both were drawn in the
+    /// same `labelColor` as the paragraph around them, which is what made a
+    /// document look flat next to an editor that colours its markup. One place
+    /// to change them.
+    enum Palette {
+        /// Every heading level. Follows the system accent rather than fixing a
+        /// hue that would clash with somebody else's.
+        static var heading: NSColor { .controlAccentColor }
+        /// Inline code and fenced blocks. The background tint alone is easy to
+        /// miss on a busy line.
+        static var code: NSColor { .systemPink }
+    }
+
     // MARK: - Paragraph
 
     static var paragraph: NSParagraphStyle {
@@ -95,7 +110,10 @@ enum MarkdownStyle {
                 storage.addAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor, range: r)
 
             case .heading(let level):
-                storage.addAttribute(.font, value: heading(level), range: r)
+                storage.addAttributes([
+                    .font: heading(level),
+                    .foregroundColor: Palette.heading,
+                ], range: r)
 
             case .bold:
                 addTrait(.bold, storage, r)
@@ -116,6 +134,7 @@ enum MarkdownStyle {
             case .code:
                 storage.addAttributes([
                     .font: mono,
+                    .foregroundColor: Palette.code,
                     .backgroundColor: NSColor.quaternarySystemFill,
                     .markReadCode: true,
                 ], range: r)
