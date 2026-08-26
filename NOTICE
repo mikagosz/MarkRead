@@ -1,0 +1,12 @@
+MarkRead — notice on artwork
+
+The MIT licence in LICENSE covers the SOURCE CODE of this project.
+
+It does NOT cover the application artwork:
+
+    MarkRead/markread icon.icon
+
+That artwork is Copyright (c) 2026 mikagosz, all rights reserved. It is included
+in this repository so the project builds as shipped. It may not be reused,
+redistributed or adapted — in a fork or anywhere else — without written
+permission. If you fork this project, replace the icon with your own.
