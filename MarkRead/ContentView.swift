@@ -38,9 +38,8 @@ private struct Sidebar: View {
             if app.folder.root != nil {
                 // A plain field rather than `.searchable(placement: .sidebar)`:
                 // that modifier renders as an unstyled white slab inside a
-                // NavigationSplitView sidebar on this OS. Seen in a screenshot
-                // taken through AppBridge, which is the only reason it was found
-                // — it looks fine in a SwiftUI preview.
+                // NavigationSplitView sidebar on this OS. Only visible in a real
+                // screenshot of the running app — it looks fine in a preview.
                 HStack(spacing: 6) {
                     Image(systemName: "line.3.horizontal.decrease")
                         .foregroundStyle(.tertiary)
