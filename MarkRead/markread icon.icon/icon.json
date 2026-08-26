@@ -7,14 +7,13 @@
       "layers" : [
         {
           "glass" : false,
-          "hidden" : false,
-          "image-name" : "ikona markread.png",
-          "name" : "ikona markread",
+          "image-name" : "ikona markread2.png",
+          "name" : "ikona markread2",
           "position" : {
-            "scale" : 1.05,
+            "scale" : 1.15,
             "translation-in-points" : [
-              6.8250000000000455,
-              1.1368683772161603e-13
+              19.7890625,
+              8.050000000000068
             ]
           }
         }
