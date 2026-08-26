@@ -45,6 +45,12 @@ at all: in a real note the URLs are longer than the rows they belong to.
   "Close Folder" to let go of it again. With no folder open the list shows the
   note you have open and the ones you opened before it.
 - Drop a `.md` file on the window to open it.
+- **New Note** (⌘N, or the pencil in the toolbar): the save panel picks the name
+  and the place, the file is created empty and opened like any other. There is no
+  such thing here as a document without a file.
+- Settings (⌘,) for the reading face and its size. Code, tables and front matter
+  stay monospaced whatever is chosen — table columns are padded in whole
+  monospaced characters, and a proportional face there loses their alignment.
 - Editing commands under the Format menu: bold, italic, strikethrough,
   highlight, inline code, headings 1–3, lists, tasks, quotes, code blocks, links.
 - Save refuses to run when the file changed on disk since it was opened, and
@@ -75,8 +81,9 @@ To uninstall, delete the app. Two small files stay behind on disk:
 ~/Library/Application Support/com.apple.sharedfilelist/…/com.mikagosz.markread.sfl4
 ```
 
-The first is window geometry and sidebar state, the second is the list of
-recently opened documents. Neither holds anything else.
+The first is window geometry, sidebar state and the two Settings values (font
+family and text size); the second is the list of recently opened documents.
+Neither holds anything else.
 
 ## Layout
 
@@ -92,10 +99,11 @@ recently opened documents. Neither holds anything else.
 | `FolderIndex.swift` | The sidebar's file list and wiki-link resolution |
 | `AppState.swift` | What one window is looking at; where links are followed |
 | `EditorActions.swift` | The Format menu commands |
+| `SettingsView.swift` | The Settings scene: reading face and text size |
 
 ## Tests
 
-Headless, no frameworks, no fixtures. All three run in under a second.
+Headless, no frameworks, no fixtures. All four run in under a second.
 
 ```sh
 swiftc -parse-as-library MarkRead/MarkdownSyntax.swift MarkRead/MarkdownScanner.swift \
@@ -123,6 +131,16 @@ swiftc -parse-as-library -swift-version 6 -default-isolation MainActor \
        MarkRead/MarkdownTables.swift MarkRead/MarkdownTableRenderer.swift \
        MarkRead/MarkdownTextView.swift MarkRead/EditorActions.swift \
        Tests/links-check.swift -o /tmp/links-check && /tmp/links-check
+```
+
+The fourth checks the Format menu's wrap commands, which edit the file: an empty
+selection between two markers must not swallow them, and a bold word must not
+come back italic because ⌘I found one star on each side.
+
+```sh
+swiftc -parse-as-library -swift-version 6 -default-isolation MainActor \
+       MarkRead/EditorActions.swift Tests/editor-check.swift \
+       -o /tmp/editor-check && /tmp/editor-check
 ```
 
 ### The oracle

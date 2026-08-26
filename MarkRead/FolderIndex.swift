@@ -64,6 +64,20 @@ final class FolderIndex {
         isScanning = false
     }
 
+    /// Puts a note that has just been created into the list.
+    ///
+    /// Cheaper than walking the tree again for one file, and the alternative —
+    /// leaving it out until the next scan — means a note you just made is
+    /// missing from the folder you made it in.
+    func noteCreated(_ url: URL) {
+        guard let root else { return }
+        let rootPath = root.standardizedFileURL.path
+        let path = url.standardizedFileURL.path
+        guard path.hasPrefix(rootPath + "/"), !entries.contains(where: { $0.url == url }) else { return }
+        entries.append(Entry(url: url, relativePath: String(path.dropFirst(rootPath.count + 1))))
+        entries.sort { $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending }
+    }
+
     /// Best match for a `[[Wiki Link]]` target: exact relative path first, then
     /// file name, case-insensitively. Returns nil when the folder holds no such
     /// note — the caller then says so rather than opening the wrong file.

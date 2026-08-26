@@ -12,6 +12,18 @@ struct ContentView: View {
             Detail(app: app)
         }
         .navigationTitle(app.document?.displayName ?? "MarkRead")
+        .toolbar {
+            // Sits at this level, not in the detail view, so it is there when
+            // nothing is open — which is exactly when a blank note is wanted.
+            ToolbarItem(placement: .navigation) {
+                Button {
+                    app.newNote()
+                } label: {
+                    Image(systemName: "square.and.pencil")
+                }
+                .help("New Note (⌘N)")
+            }
+        }
         .alert(item: $app.alert) { alert in
             switch alert.kind {
             case .message:
