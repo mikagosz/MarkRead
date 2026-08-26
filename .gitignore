@@ -1,0 +1,30 @@
+# macOS
+.DS_Store
+
+# Xcode — stan użytkownika, nazwa konta w ścieżce
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+
+# Build
+build/
+DerivedData/
+*.dSYM
+*.dSYM.zip
+*.hmap
+*.ipa
+
+# Klucze i certyfikaty — .p12 zawiera klucz prywatny
+*.p12
+*.cer
+*.certSigningRequest
+*.mobileprovision
+*.provisionprofile
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Materiały do budowy instalatora — robocze pliki autora, nie kod
+* - instalator/
