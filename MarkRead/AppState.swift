@@ -16,19 +16,36 @@ final class AppState {
     let editor = EditorHandle()
 
     var alert: Alert?
+    /// What is typed in the sidebar's filter field. One field for all three
+    /// sections, so it belongs to the window rather than to the folder.
+    var sidebarFilter: String = ""
     /// Where the link under the pointer goes, in the form a person reads.
     ///
     /// Shown at the bottom of the window. The editor hides half of every
     /// `](…)` on purpose, so this is the only thing on screen that says what a
     /// link will open before it is opened.
     private(set) var hoveredLink: String?
-    /// Notes opened before, for the sidebar when no folder is chosen.
-    /// `noteNewRecentDocumentURL` has been writing this list to disk all along
-    /// with nowhere to show it.
-    private(set) var recents: [URL] = []
+    /// What the sidebar remembers: pinned notes, notes opened lately, and the
+    /// folder that was open last time. Its own list, on purpose —
+    /// `NSDocumentController.recentDocumentURLs` was measured empty on this Mac
+    /// however many notes had been opened, which is why the sidebar only ever
+    /// showed the note on screen.
+    let library: NoteLibrary
 
-    init() {
-        recents = NSDocumentController.shared.recentDocumentURLs
+    /// `defaults` is a seam for the checks, and nothing else: a headless render
+    /// of the sidebar must not write into the list the real app is showing.
+    init(defaults: UserDefaults = .standard) {
+        library = NoteLibrary(defaults: defaults)
+        // The folder survives a relaunch. The note on screen does not: reopening
+        // a file means reading it, and reading a file the reader has not asked
+        // for yet is how an editor loses the argument about whose text it is.
+        if let remembered = library.folder {
+            var isDirectory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: remembered.path, isDirectory: &isDirectory),
+               isDirectory.boolValue {
+                folder.open(remembered)
+            }
+        }
     }
     /// Real state, not a constant. It used to be a `Bool` fed into
     /// `.constant(...)`, which meant the toolbar button next to the system's own
@@ -77,7 +94,14 @@ final class AppState {
         panel.allowsMultipleSelection = false
         panel.message = "Choose a folder of notes."
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        openFolder(url)
+    }
+
+    /// Opening a folder and remembering it are one action, so there is no path
+    /// through the app that lists a folder without writing it down.
+    func openFolder(_ url: URL) {
         folder.open(url)
+        library.rememberFolder(url)
     }
 
     /// Makes an empty note and opens it.
@@ -122,7 +146,7 @@ final class AppState {
             return
         }
         if isDirectory.boolValue {
-            folder.open(url)
+            openFolder(url)
             return
         }
         openFile(url)
@@ -147,8 +171,7 @@ final class AppState {
         }
         do {
             document = try MarkdownDocument(url: url)
-            NSDocumentController.shared.noteNewRecentDocumentURL(url)
-            recents = NSDocumentController.shared.recentDocumentURLs
+            library.noteOpened(url)
             // Deliberately does *not* index the file's folder. It used to, and a
             // single note opened from the Desktop pulled 114 files out of two
             // unrelated vaults into the sidebar. With no folder chosen the
@@ -159,10 +182,10 @@ final class AppState {
     }
 
     /// Two URLs naming the same file. Finder, `open -a` and a relative link all
-    /// arrive with different spellings of the same path.
-    private static func sameFile(_ a: URL, _ b: URL) -> Bool {
-        a.standardizedFileURL.resolvingSymlinksInPath() == b.standardizedFileURL.resolvingSymlinksInPath()
-    }
+    /// arrive with different spellings of the same path. One implementation, in
+    /// `NoteLibrary`, because the sidebar has to answer the same question about
+    /// the same files.
+    static func sameFile(_ a: URL, _ b: URL) -> Bool { NoteLibrary.same(a, b) }
 
     // MARK: - Saving
 
@@ -205,7 +228,38 @@ final class AppState {
 
     func closeFolder() {
         folder.clear()
+        library.rememberFolder(nil)
     }
+
+    // MARK: - The sidebar's own list
+
+    /// Notes dropped on the sidebar, or handed over several at a time by Finder.
+    ///
+    /// Folders among them are opened as folders — dropping a folder on a list of
+    /// notes means "list this", not "remember this file".
+    func add(_ urls: [URL]) {
+        var notes: [URL] = []
+        for url in urls {
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else { continue }
+            if isDirectory.boolValue {
+                openFolder(url)
+            } else if Self.isNote(url) {
+                notes.append(url)
+            }
+        }
+        library.pin(notes)
+    }
+
+    /// What may be pinned: the extensions this app can actually edit. Dropping a
+    /// PDF on the note list would make a row that opens something else.
+    static func isNote(_ url: URL) -> Bool {
+        editableExtensions.contains(url.pathExtension.lowercased())
+    }
+
+    func unpin(_ url: URL) { library.unpin(url) }
+    func forget(_ url: URL) { library.forget(url) }
+    func pin(_ url: URL) { library.pin([url]) }
 
     func reloadFromDisk() {
         guard let document else { return }

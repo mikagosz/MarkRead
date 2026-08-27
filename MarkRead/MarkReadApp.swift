@@ -105,12 +105,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // A double-click in Finder, a drop on the Dock icon, or `open -a`.
         guard let first = urls.first else { return }
         AppState.shared.open(first)
-        // A second file is a folder-or-file ambiguity we do not guess at; opening
-        // the first and listing the rest in the sidebar is the honest behaviour.
+        // The rest go where the alert has always said they go. Until the sidebar
+        // had a list of its own this sentence was a promise the app could not
+        // keep: "use the note list for the rest" pointed at a list nothing was
+        // ever added to.
         if urls.count > 1 {
+            AppState.shared.add(Array(urls.dropFirst()))
             AppState.shared.alert = AppState.Alert(
                 title: "Opened one file",
-                detail: "MarkRead opens one file at a time. \(first.lastPathComponent) is open; use the note list for the rest."
+                detail: "MarkRead opens one file at a time. \(first.lastPathComponent) is open; the rest are pinned to the note list."
             )
         }
     }

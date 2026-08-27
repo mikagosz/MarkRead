@@ -29,13 +29,15 @@ final class FolderIndex {
     /// is no longer open.
     private var generation = 0
 
-    /// Free-text filter typed in the sidebar.
-    var filter: String = ""
-
-    var filtered: [Entry] {
-        let needle = filter.trimmingCharacters(in: .whitespaces)
-        guard !needle.isEmpty else { return entries }
-        return entries.filter { $0.relativePath.localizedCaseInsensitiveContains(needle) }
+    /// The entries matching what was typed in the sidebar's filter field.
+    ///
+    /// The text itself lives on `AppState`, not here: one field now filters the
+    /// pinned notes and the recent ones as well, and a filter owned by the
+    /// folder would have been a second copy of it the moment no folder was open.
+    func matching(_ needle: String) -> [Entry] {
+        let trimmed = needle.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return entries }
+        return entries.filter { $0.relativePath.localizedCaseInsensitiveContains(trimmed) }
     }
 
     func open(_ folder: URL) {
@@ -59,7 +61,6 @@ final class FolderIndex {
         generation += 1
         root = nil
         entries = []
-        filter = ""
         truncated = false
         isScanning = false
     }
