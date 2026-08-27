@@ -51,14 +51,25 @@ at all: in a real note the URLs are longer than the rows they belong to.
 - **New Note** (⌘N, or the pencil in the toolbar): the save panel picks the name
   and the place, the file is created empty and opened like any other. There is no
   such thing here as a document without a file.
-- Settings (⌘,) for the reading face, its size, and one of three **looks**. A
+- Settings (⌘,) for the reading face, its size, and one of four **looks**. A
   Markdown file stores no appearance of its own — every program that opens it
-  invents one — so rather than guess, MarkRead offers the three that were on the
-  table: **MarkRead** (headings in the system accent, emphasis and code
-  coloured), **Like Xcode** (no colour on headings or emphasis; the table header
-  carries it instead) and **Plain** (no colour except links). Code, table rows and
-  front matter take a **code font** of their own, and only fixed-pitch faces are
-  offered for it — a table shown as raw markdown is hand-aligned text, and
+  invents one — so rather than guess, MarkRead offers four:
+
+  - **MarkRead** — headings in the system accent, emphasis and code coloured.
+  - **Like Xcode** — matched to Xcode's own theme file rather than to a
+    screenshot. Three heading sizes, none of them bold, level three and below at
+    half alpha, code at body size, and Xcode's own background, border and link
+    colours. Spacing follows the same source: the font's leading and no paragraph
+    spacing at all, because the gap between two blocks is the blank line already
+    standing between them in the file.
+  - **Plain** — no colour except links; headings differ by size only.
+  - **Dark Claude color** — the Claude Code palette. Unlike the other three this
+    one is a *theme* rather than an appearance: it keeps its dark colours with the
+    Mac set to light, so it carries its own editor background, caret and
+    selection.
+
+  Code, table rows and front matter take a **code font** of their own, and only
+  fixed-pitch faces are offered for it — a table shown as raw markdown is hand-aligned text, and
   hand-aligned columns only line up when every character is the same width. A
   proportional family is refused outright, not merely left out of the picker.
 - Editing commands under the Format menu: bold, italic, strikethrough,
@@ -109,11 +120,12 @@ Neither holds anything else.
 | `FolderIndex.swift` | The sidebar's file list and wiki-link resolution |
 | `AppState.swift` | What one window is looking at; where links are followed |
 | `EditorActions.swift` | The Format menu commands |
-| `SettingsView.swift` | The Settings scene: reading face and text size |
+| `SettingsView.swift` | The Settings scene: look, reading face, text size, code face |
 
 ## Tests
 
-Headless, no frameworks, no fixtures. All five run in under a second.
+Headless, no frameworks. All seven run in under a second. Two of them read a
+fixture from `Tests/Fixtures/`; the rest carry their own input.
 
 ```sh
 swiftc -parse-as-library MarkRead/MarkdownSyntax.swift MarkRead/MarkdownScanner.swift \
@@ -153,14 +165,55 @@ swiftc -parse-as-library -swift-version 6 -default-isolation MainActor \
        -o /tmp/editor-check && /tmp/editor-check
 ```
 
-The fifth checks what colour a construct ends up in — specifically that emphasis
-never paints over a colour something else was given first:
+The fifth checks what colour a construct ends up in — that emphasis never paints
+over a colour something else was given first, and that each look's numbers are
+the ones it claims:
 
 ```sh
 swiftc -parse-as-library -swift-version 6 -default-isolation MainActor \
        MarkRead/MarkdownSyntax.swift MarkRead/MarkdownScanner.swift \
        MarkRead/MarkdownTables.swift MarkRead/MarkdownStyle.swift \
        Tests/style-check.swift -o /tmp/style-check && /tmp/style-check
+```
+
+The sixth reads the colours back out of `Tests/Fixtures/palette.md` — a page
+holding every construct at once — and compares them with the hex values the
+palette names. It runs under the **light** appearance deliberately: a theme that
+keeps its dark colours whatever the Mac is set to will hide anything still
+reaching past the palette for a system colour, because that comes out dark on a
+dark ground.
+
+```sh
+swiftc -parse-as-library -swift-version 6 -default-isolation MainActor \
+       MarkRead/MarkdownSyntax.swift MarkRead/MarkdownScanner.swift \
+       MarkRead/MarkdownTables.swift MarkRead/MarkdownStyle.swift \
+       Tests/palette-check.swift -o /tmp/palette-check && /tmp/palette-check
+```
+
+The seventh draws a table into a bitmap and samples the pixels of its frame,
+against a fixture whose rows alternate between ending in a link and ending in
+plain text. A table whose cells all end the same way cannot show the fault it
+defends against — a border drawn in whatever colour the last glyph left behind:
+
+```sh
+swiftc -parse-as-library -swift-version 6 -default-isolation MainActor \
+       MarkRead/MarkdownSyntax.swift MarkRead/MarkdownScanner.swift \
+       MarkRead/MarkdownTables.swift MarkRead/MarkdownStyle.swift \
+       MarkRead/MarkdownTableRenderer.swift \
+       Tests/table-border-check.swift -o /tmp/table-border-check \
+  && /tmp/table-border-check
+```
+
+### Seeing a change
+
+`Tests/render-shot.swift` is not a test but a pair of eyes: it builds the real
+editor in an off-screen window and saves what it drew, so work on a look stops
+being a matter of opinion. It takes the look, a scroll fraction, an appearance
+and a window width — the appearance is set on the window, not on the machine, so
+both can be checked without touching what the Mac is set to.
+
+```sh
+./render-shot note.md xcode /tmp/out.png 0.8 light 620
 ```
 
 ### The oracle
