@@ -674,7 +674,32 @@ struct MarkdownEditor: NSViewRepresentable {
                 pending.append((firstLine, lastLine))
                 styledRange = firstLine ... lastLine
             }
-            for (from, to) in pending { style(from: from, to: to) }
+            // A table is measured from every row it has, so a span that begins
+            // or ends in the middle of one produces a *piece* of table with its
+            // own column widths — and the piece without the `|---|` row does not
+            // even know it has a header. That is the reported split: the top of
+            // the table on one grid, the bottom on another. So each span is
+            // grown until neither end sits inside a table, which is the one
+            // place where "style only what is new" has to give ground.
+            for (from, to) in pending.map(wholeTables) {
+                style(from: from, to: to)
+                if let styled = styledRange {
+                    styledRange = min(from, styled.lowerBound) ... max(to, styled.upperBound)
+                }
+            }
+        }
+
+        /// Grows a span of lines until it starts and ends outside a table.
+        ///
+        /// Only ends that are *inside* a table move; a span that already begins
+        /// on ordinary text is returned untouched. A table longer than the
+        /// styling window is therefore styled and measured in one piece — the
+        /// only unit its column widths can be computed from.
+        private func wholeTables(_ span: (Int, Int)) -> (Int, Int) {
+            var (first, last) = span
+            while first > 0, isTableRow(first), isTableRow(first - 1) { first -= 1 }
+            while last < map.lines.count - 1, isTableRow(last), isTableRow(last + 1) { last += 1 }
+            return (first, last)
         }
 
         /// Everything the styling of one span of lines needs, done once.
