@@ -147,6 +147,20 @@ struct TableBorderCheck {
             return
         }
 
+        // 🔴 The invariant the drawing now rests on: every line the table owns
+        // — the delimiter included — hands back a height. `Coordinator.rowRects`
+        // stacks the table from one anchor using exactly these numbers, so a nil
+        // here would silently shorten the stack and slide every row below it up.
+        // The view-layer fault this replaced is verified by rendering, not here:
+        // it was a line *fragment* disagreeing with the height that was reserved,
+        // and there is no fragment without a text view.
+        for line in table.lines {
+            check("line \(line) has a height to be stacked with",
+                  table.height(forLine: line) != nil)
+        }
+        check("the delimiter's height is the thin rule, not a row",
+              table.delimiterLine.flatMap { table.height(forLine: $0) } == 1)
+
         // Every body row's left edge, sampled.
         var edges: [(line: Int, colour: NSColor?)] = []
         for line in rows where line != table.delimiterLine {

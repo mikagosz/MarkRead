@@ -930,12 +930,66 @@ struct MarkdownEditor: NSViewRepresentable {
             }
         }
 
+        /// Where each of a table's rows is drawn.
+        ///
+        /// 🔴 Anchored once and then stacked by the rows' **own** heights, rather
+        /// than asking the layout for a rectangle per source line.
+        ///
+        /// Measured 2026-08-27 on a 620-point window: a row whose paragraph style
+        /// carried `maximumLineHeight = 48` — the right number, still there in the
+        /// storage at drawing time — was handed a line fragment **18 points**
+        /// tall, and the row after it began 30 points too high. Two rows drew on
+        /// top of each other and the frame ran through the middle of them, which
+        /// is what "the border does not work" looked like. Every other row in the
+        /// same table got exactly the height it asked for, so this is not the
+        /// reserved height being wrong; it is one fragment disagreeing with it.
+        ///
+        /// The table knows its own geometry and does not need to ask twice. One
+        /// rectangle from the layout fixes the table in place; everything below
+        /// follows from `height(forLine:)`, which is the same number the space was
+        /// reserved with. A fragment that comes back the wrong size can then push
+        /// the table a few points out of its hole — it can no longer fold the
+        /// table in on itself.
+        private func rowRects(for table: TableLayout, in rects: [Int: CGRect]) -> [Int: CGRect] {
+            // The anchor is the topmost row the layout will admit to. Usually
+            // that is the table's first line; when the table is scrolled off the
+            // top it is whichever row is on screen, and the rows above it are
+            // subtracted to find where the table starts.
+            guard let anchorLine = table.lines.first(where: { rects[$0] != nil }),
+                  let anchor = rects[anchorLine] else { return [:] }
+            var top = anchor.minY
+            for line in table.lines where line < anchorLine {
+                top -= table.height(forLine: line) ?? 1
+            }
+
+            var result: [Int: CGRect] = [:]
+            var y = top
+            for line in table.lines {
+                let height = table.height(forLine: line) ?? 1
+                result[line] = CGRect(x: anchor.minX, y: y, width: anchor.width, height: height)
+                y += height
+            }
+            return result
+        }
+
+        /// Every table with a row among the laid-out lines, each listed once.
+        private func visibleTables() -> [TableLayout] {
+            var seen = Set<Int>()
+            return tablesByLine.keys.sorted().compactMap { line in
+                guard let table = tablesByLine[line],
+                      seen.insert(table.lines.lowerBound).inserted else { return nil }
+                return table
+            }
+        }
+
         func drawTables(in dirtyRect: NSRect) {
             guard !tablesByLine.isEmpty else { return }
             let rects = lineRects()
-            for (line, table) in tablesByLine {
-                guard let rect = rects[line], rect.intersects(dirtyRect) else { continue }
-                table.draw(line: line, in: rect)
+            for table in visibleTables() {
+                for (line, rect) in rowRects(for: table, in: rects)
+                where rect.intersects(dirtyRect) {
+                    table.draw(line: line, in: rect)
+                }
             }
         }
 
@@ -944,10 +998,13 @@ struct MarkdownEditor: NSViewRepresentable {
             // mouse-moved event — same early exit as `drawTables`.
             guard !tablesByLine.isEmpty else { return nil }
             let rects = lineRects()
-            for (line, table) in tablesByLine {
-                guard let rect = rects[line], rect.contains(point) else { continue }
-                return table.link(inLine: line,
-                                  at: CGPoint(x: point.x - rect.minX, y: point.y - rect.minY))
+            // The same geometry the drawing uses, for the same reason: a click has
+            // to land in the cell it looks like it landed in.
+            for table in visibleTables() {
+                for (line, rect) in rowRects(for: table, in: rects) where rect.contains(point) {
+                    return table.link(inLine: line,
+                                      at: CGPoint(x: point.x - rect.minX, y: point.y - rect.minY))
+                }
             }
             return nil
         }

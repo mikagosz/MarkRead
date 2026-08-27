@@ -7,7 +7,7 @@
 //
 //   swiftc -parse-as-library -swift-version 6 -default-isolation MainActor \
 //     <MarkRead sources> render-shot.swift -o shot
-//   ./shot <note.md> <markRead|xcode|plain> <out.png> [scrollFraction] [dark|light]
+//   ./shot <note.md> <look> <out.png> [scrollFraction] [dark|light] [width]
 //
 // The appearance is set on the window, not on the system: a look has to be
 // checkable in both without touching what the machine is set to.
@@ -30,6 +30,10 @@ struct Shot {
         guard args.count >= 4 else { print("usage: shot <note> <look> <out.png> [fraction]"); exit(2) }
         let fraction = args.count > 4 ? Double(args[4]) ?? 0 : 0
         let appearance: NSAppearance.Name = (args.count > 5 && args[5] == "light") ? .aqua : .darkAqua
+        // Window width matters for anything laid out to the text column — a
+        // table narrower than its content is a different drawing problem from a
+        // table that fits.
+        let windowWidth = args.count > 6 ? (Double(args[6]) ?? 1000) : 1000
 
         UserDefaults.standard.set(args[2], forKey: MarkdownStyle.Appearance.lookKey)
         MarkdownStyle.Appearance.reload()
@@ -38,7 +42,7 @@ struct Shot {
         app.setActivationPolicy(.accessory)
 
         let text = (try? String(contentsOfFile: args[1], encoding: .utf8)) ?? "# nothing to render"
-        let size = NSSize(width: 1000, height: 1300)
+        let size = NSSize(width: windowWidth, height: 1300)
         let window = NSWindow(contentRect: NSRect(origin: .zero, size: size),
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.appearance = NSAppearance(named: appearance)
