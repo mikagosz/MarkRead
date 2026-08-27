@@ -204,6 +204,39 @@ swiftc -parse-as-library -swift-version 6 -default-isolation MainActor \
   && /tmp/table-border-check
 ```
 
+The ninth is the sidebar's own list — pinned notes, recent notes and the
+remembered folder — including that all three survive a relaunch, that a pinned
+note is never pushed off by newer ones, and that a note on a volume that is not
+mounted is *marked* rather than dropped:
+
+```sh
+swiftc -parse-as-library -swift-version 6 -default-isolation MainActor \
+       MarkRead/NoteLibrary.swift Tests/library-check.swift \
+       -o /tmp/library-check && /tmp/library-check
+```
+
+It runs against its own UserDefaults suite, so it never touches the list the
+installed app is showing.
+
+The eighth drives the real editor in an off-screen window and scrolls it through
+a note whose table is longer than the styling window, because that is the only
+way the fault it defends against appears: styling is incremental, and a span
+that begins inside a table used to be measured as a table of its own — the rows
+above on one set of column widths, the rows below on another, the lower piece
+without a header. It counts how many tables the editor believes it is holding,
+scrolling down, scrolling back up, and after a width change:
+
+```sh
+swiftc -parse-as-library -swift-version 6 -default-isolation MainActor -D DEBUG \
+       MarkRead/MarkdownSyntax.swift MarkRead/MarkdownScanner.swift \
+       MarkRead/MarkdownTables.swift MarkRead/MarkdownStyle.swift \
+       MarkRead/MarkdownTableRenderer.swift MarkRead/MarkdownTextView.swift \
+       Tests/table-split-check.swift -o /tmp/table-split-check \
+  && /tmp/table-split-check
+```
+
+`-D DEBUG` is not optional here: the counter it reads is the debug bridge.
+
 ### Seeing a change
 
 `Tests/render-shot.swift` is not a test but a pair of eyes: it builds the real
@@ -214,6 +247,15 @@ both can be checked without touching what the Mac is set to.
 
 ```sh
 ./render-shot note.md xcode /tmp/out.png 0.8 light 620
+```
+
+`Tests/sidebar-shot.swift` does the same for the other half of the window: it
+builds the real `ContentView` with a believable list in it — notes pinned, notes
+opened lately, a folder underneath — and writes a PNG, because "the folder must
+not read as one list with the loose notes above it" is a claim about pixels.
+
+```sh
+./sidebar-shot ~/Documents/SomeNotes /tmp/sidebar.png light
 ```
 
 ### The oracle

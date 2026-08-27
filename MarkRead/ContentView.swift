@@ -65,144 +65,287 @@ private struct Sidebar: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if app.folder.root != nil {
-                // A plain field rather than `.searchable(placement: .sidebar)`:
-                // that modifier renders as an unstyled white slab inside a
-                // NavigationSplitView sidebar on this OS. Only visible in a real
-                // screenshot of the running app — it looks fine in a preview.
-                HStack(spacing: 6) {
-                    Image(systemName: "line.3.horizontal.decrease")
-                        .foregroundStyle(.tertiary)
-                    TextField("Filter notes", text: filterText)
-                        .textFieldStyle(.plain)
-                    if !app.folder.filter.isEmpty {
-                        Button {
-                            app.folder.filter = ""
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                        }
-                        .buttonStyle(.borderless)
-                        .foregroundStyle(.tertiary)
-                    }
-                }
-                .font(.callout)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(.quaternary.opacity(0.5), in: .rect(cornerRadius: 7))
-                .padding(.horizontal, 10)
-                .padding(.top, 8)
-                .padding(.bottom, 4)
-            }
-
-            if app.folder.root == nil {
-                withoutFolder
-            } else {
-                List(selection: selection) {
-                    ForEach(app.folder.filtered) { entry in
-                        row(entry)
-                            .tag(entry.url)
-                    }
-                }
-                .listStyle(.sidebar)
-                .overlay {
-                    if app.folder.isScanning {
-                        ProgressView().controlSize(.small)
-                    } else if app.folder.filtered.isEmpty {
-                        ContentUnavailableView("No notes", systemImage: "doc.text",
-                                               description: Text("Nothing matching in this folder."))
-                    }
-                }
-            }
+            if hasRows { filterField }
+            if hasRows { list } else { nothingYet }
         }
-        .safeAreaInset(edge: .bottom) {
-            if let root = app.folder.root {
-                HStack(spacing: 6) {
-                    Image(systemName: "folder")
-                    Text(root.lastPathComponent).lineLimit(1).truncationMode(.head)
-                    if app.folder.truncated {
-                        Image(systemName: "exclamationmark.triangle")
-                            .help("This folder goes deeper or holds more notes than the list shows.")
-                    }
-                    Spacer()
-                    Button {
-                        app.chooseFolder()
-                    } label: {
-                        Image(systemName: "arrow.triangle.2.circlepath")
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Choose a different folder")
-                    Button {
-                        app.closeFolder()
-                    } label: {
-                        Image(systemName: "xmark.circle")
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Close this folder")
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(.bar)
-            }
+        // Right-click on the empty part of the list. Without this, the only way
+        // to the Open and Choose Folder commands was the File menu or the empty
+        // state's two buttons — and the empty state is gone the moment there is
+        // one note in the list.
+        .contextMenu { listCommands }
+        // Notes dropped anywhere on the sidebar are pinned to it. This is the
+        // whole of "add a note to the list": there is no button for it, because
+        // the gesture people already try is dragging the file in.
+        .dropDestination(for: URL.self) { urls, _ in
+            app.add(urls)
+            return true
         }
+        .safeAreaInset(edge: .bottom) { folderBar }
     }
 
-    /// No folder chosen: the note that is open, and the ones opened before it.
-    ///
-    /// This is not "nothing to show". Opening a single note used to index that
-    /// note's own directory, which on a Desktop meant 114 files out of two
-    /// unrelated vaults, flat, with no way to close the folder again. The list
-    /// of recent documents was already being written to disk with nowhere to
-    /// appear; here is where it appears.
+    // MARK: - The three sections
+
+    /// Notes pinned by hand: dropped on the sidebar, or handed over by Finder
+    /// alongside the one that was opened. These never fall off the list.
+    private var pinned: [URL] { app.library.pinned.filter(matches) }
+    /// Notes opened lately, newest first, bounded by `NoteLibrary.recentsLimit`.
+    private var recents: [URL] { app.library.recents.filter(matches) }
+    private var folderEntries: [FolderIndex.Entry] { app.folder.matching(app.sidebarFilter) }
+
+    private var hasRows: Bool {
+        !app.library.pinned.isEmpty || !app.library.recents.isEmpty || app.folder.root != nil
+    }
+
     @ViewBuilder
-    private var withoutFolder: some View {
-        if app.document == nil, app.recents.isEmpty {
-            ContentUnavailableView {
-                Label("No notes yet", systemImage: "doc.text")
-            } description: {
-                Text("Open a note, or choose a folder to list one.")
-            } actions: {
-                Button("Open…") { app.openPanel() }
-                Button("Choose Folder…") { app.chooseFolder() }
-            }
-        } else {
-            List(selection: selection) {
-                if let document = app.document {
-                    Section("Open") {
-                        Text(document.displayName)
-                            .lineLimit(1)
-                            .tag(document.url)
-                    }
-                }
-                let earlier = app.recents.filter { $0 != app.document?.url }
-                if !earlier.isEmpty {
-                    Section("Recent") {
-                        ForEach(earlier, id: \.self) { url in
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(url.deletingPathExtension().lastPathComponent)
-                                    .lineLimit(1)
-                                Text((url.deletingLastPathComponent().path as NSString)
-                                    .abbreviatingWithTildeInPath)
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
-                                    .lineLimit(1)
-                                    .truncationMode(.head)
-                            }
-                            .padding(.vertical, 1)
+    private var list: some View {
+        List(selection: selection) {
+            if !pinned.isEmpty {
+                Section {
+                    ForEach(pinned, id: \.self) { url in
+                        noteRow(url)
                             .tag(url)
-                        }
+                            .contextMenu { pinnedMenu(url) }
                     }
+                    .onMove { app.library.movePinned(from: $0, to: $1) }
+                } header: {
+                    header("Pinned", systemImage: "pin.fill")
                 }
             }
-            .listStyle(.sidebar)
+
+            if !recents.isEmpty {
+                Section {
+                    ForEach(recents, id: \.self) { url in
+                        noteRow(url)
+                            .tag(url)
+                            .contextMenu { recentMenu(url) }
+                    }
+                } header: {
+                    header("Recent", systemImage: "clock")
+                }
+            }
+
+            if let root = app.folder.root {
+                Section {
+                    ForEach(folderEntries) { entry in
+                        folderRow(entry)
+                            .tag(entry.url)
+                            .contextMenu { folderMenu(entry.url) }
+                    }
+                    if folderEntries.isEmpty {
+                        Text(app.folder.isScanning ? "Reading…" : "Nothing matching in this folder.")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                } header: {
+                    // The folder is a *place*, not a handful of loose notes, and
+                    // the request was that the two never read as one list: its
+                    // own name, its own icon, and a rule above it.
+                    header(root.lastPathComponent, systemImage: "folder.fill", ruled: true)
+                }
+            }
+        }
+        .listStyle(.sidebar)
+    }
+
+    /// A section title that can actually be told apart from the rows under it.
+    ///
+    /// `.listStyle(.sidebar)` draws a plain section header in the same weight as
+    /// a note's own subtitle, which is what let the folder's contents and the
+    /// pinned notes read as one long list.
+    private func header(_ title: String, systemImage: String, ruled: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if ruled {
+                Divider().padding(.top, 4).padding(.bottom, 6)
+            }
+            Label(title, systemImage: systemImage)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.head)
         }
     }
 
-    /// `folder` is a `let` on AppState, so `$app.folder.filter` has nothing to
-    /// project through — the binding is written out by hand instead.
-    private var filterText: Binding<String> {
-        Binding(get: { app.folder.filter }, set: { app.folder.filter = $0 })
+    // MARK: - Rows
+
+    @ViewBuilder
+    private func noteRow(_ url: URL) -> some View {
+        let gone = app.library.isMissing(url)
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 4) {
+                Text(url.deletingPathExtension().lastPathComponent)
+                    .lineLimit(1)
+                if gone {
+                    Image(systemName: "questionmark.circle")
+                        .foregroundStyle(.tertiary)
+                        .help("Not where it was. A disk or a share may be offline — the row is kept either way.")
+                }
+            }
+            // The folder's name, not its path. A pinned note usually lives in a
+            // vault whose path is four levels of "Mobile Documents/iCloud~md~…"
+            // before it says anything a person recognises, and the sidebar is
+            // 240 pt wide. The whole path is one hover away.
+            Text(url.deletingLastPathComponent().lastPathComponent)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .truncationMode(.head)
+        }
+        .padding(.vertical, 1)
+        .opacity(gone ? 0.55 : 1)
+        .help((url.path as NSString).abbreviatingWithTildeInPath)
+    }
+
+    @ViewBuilder
+    private func folderRow(_ entry: FolderIndex.Entry) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 4) {
+                Text(entry.name)
+                    .lineLimit(1)
+                // A note that is also pinned appears twice — once at the top of
+                // the sidebar and once in its folder, where the folder listing
+                // has to stay complete or it is not a folder listing. The pin
+                // says the two rows are the same note rather than two notes with
+                // the same name.
+                if app.library.isPinned(entry.url) {
+                    Image(systemName: "pin.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            if !entry.parent.isEmpty {
+                Text(entry.parent)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+            }
+        }
+        .padding(.vertical, 1)
+    }
+
+    // MARK: - Menus
+
+    /// What the list itself can do, as opposed to what one row can do.
+    ///
+    /// Repeated at the bottom of every row's menu on purpose: a right-click that
+    /// lands on a row and a right-click that lands between rows should not be
+    /// the difference between being able to open a folder and not.
+    @ViewBuilder
+    private var listCommands: some View {
+        Button("Open Note…") { app.openPanel() }
+        Button("Choose Folder…") { app.chooseFolder() }
+        if app.folder.root != nil {
+            Button("Close Folder") { app.closeFolder() }
+        }
+        if !app.library.recents.isEmpty {
+            Button("Clear Recent") { app.library.clearRecents() }
+        }
+    }
+
+    @ViewBuilder
+    private func pinnedMenu(_ url: URL) -> some View {
+        Button("Remove from Sidebar") { app.unpin(url) }
+        Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+        Divider()
+        listCommands
+    }
+
+    @ViewBuilder
+    private func recentMenu(_ url: URL) -> some View {
+        Button("Pin to Sidebar") { app.pin(url) }
+        Button("Remove from Recent") { app.forget(url) }
+        Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+        Divider()
+        listCommands
+    }
+
+    @ViewBuilder
+    private func folderMenu(_ url: URL) -> some View {
+        Button("Pin to Sidebar") { app.pin(url) }
+        Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+        Divider()
+        listCommands
+    }
+
+    // MARK: - Chrome
+
+    /// A plain field rather than `.searchable(placement: .sidebar)`: that
+    /// modifier renders as an unstyled white slab inside a NavigationSplitView
+    /// sidebar on this OS. Only visible in a real screenshot of the running app —
+    /// it looks fine in a preview.
+    private var filterField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "line.3.horizontal.decrease")
+                .foregroundStyle(.tertiary)
+            TextField("Filter notes", text: $app.sidebarFilter)
+                .textFieldStyle(.plain)
+            if !app.sidebarFilter.isEmpty {
+                Button {
+                    app.sidebarFilter = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.tertiary)
+            }
+        }
+        .font(.callout)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(.quaternary.opacity(0.5), in: .rect(cornerRadius: 7))
+        .padding(.horizontal, 10)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
+    }
+
+    /// Nothing pinned, nothing opened before, no folder. Says what the sidebar
+    /// is for, including the part that has no button — dropping a note on it.
+    private var nothingYet: some View {
+        ContentUnavailableView {
+            Label("No notes yet", systemImage: "doc.text")
+        } description: {
+            Text("Drag notes here to keep them in the list, open one, or choose a folder.")
+        } actions: {
+            Button("Open…") { app.openPanel() }
+            Button("Choose Folder…") { app.chooseFolder() }
+        }
+    }
+
+    @ViewBuilder
+    private var folderBar: some View {
+        if let root = app.folder.root {
+            HStack(spacing: 6) {
+                Image(systemName: "folder")
+                Text(root.lastPathComponent).lineLimit(1).truncationMode(.head)
+                if app.folder.isScanning {
+                    ProgressView().controlSize(.small)
+                }
+                if app.folder.truncated {
+                    Image(systemName: "exclamationmark.triangle")
+                        .help("This folder goes deeper or holds more notes than the list shows.")
+                }
+                Spacer()
+                Button {
+                    app.chooseFolder()
+                } label: {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                }
+                .buttonStyle(.borderless)
+                .help("Choose a different folder")
+                Button {
+                    app.closeFolder()
+                } label: {
+                    Image(systemName: "xmark.circle")
+                }
+                .buttonStyle(.borderless)
+                .help("Close this folder")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(.bar)
+        }
     }
 
     /// Selecting a row opens that note; the binding writes straight through to
@@ -214,20 +357,10 @@ private struct Sidebar: View {
         )
     }
 
-    @ViewBuilder
-    private func row(_ entry: FolderIndex.Entry) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(entry.name)
-                .lineLimit(1)
-            if !entry.parent.isEmpty {
-                Text(entry.parent)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.head)
-            }
-        }
-        .padding(.vertical, 1)
+    private func matches(_ url: URL) -> Bool {
+        let needle = app.sidebarFilter.trimmingCharacters(in: .whitespaces)
+        guard !needle.isEmpty else { return true }
+        return url.lastPathComponent.localizedCaseInsensitiveContains(needle)
     }
 }
 
