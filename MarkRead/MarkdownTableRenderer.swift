@@ -147,7 +147,7 @@ final class TableLayout {
         guard let tint = MarkdownStyle.Palette.tableRow else { return }
         text.enumerateAttribute(.foregroundColor, in: whole) { value, range, _ in
             guard value as? NSColor == tint else { return }
-            text.addAttribute(.foregroundColor, value: NSColor.labelColor, range: range)
+            text.addAttribute(.foregroundColor, value: MarkdownStyle.Palette.text, range: range)
         }
     }
 
@@ -292,12 +292,12 @@ final class TableLayout {
             // of side edge that belongs to this line. Skipping it left two
             // notches in the frame.
             if line == delimiterLine {
-                NSColor.separatorColor.setFill()
+                MarkdownStyle.Palette.border.setFill()
                 CGRect(x: rect.minX, y: rect.minY, width: tableWidth, height: 1).fill()
-                NSColor.separatorColor.setStroke()
                 let sides = NSBezierPath()
                 sides.lineWidth = 1
                 appendSides(sides, rect, height: 1, isFirst: false, isLast: false)
+                MarkdownStyle.Palette.border.setStroke()
                 sides.stroke()
             }
             return
@@ -307,14 +307,13 @@ final class TableLayout {
         let isLast = rows.last?.line == line
 
         if row.isHeader {
-            NSColor.quaternarySystemFill.setFill()
+            MarkdownStyle.Palette.tableHeaderFill.setFill()
             // Follows the frame's top corners rather than filling a square
             // rectangle behind them, which showed as two grey nicks outside the
             // rounded border.
             headerFill(rect, height: row.height, rounded: isFirst).fill()
         }
 
-        NSColor.separatorColor.setStroke()
         let border = NSBezierPath()
         border.lineWidth = 1
 
@@ -337,6 +336,16 @@ final class TableLayout {
             border.line(to: CGPoint(x: rect.minX + tableWidth, y: rect.minY))
         }
         appendSides(border, rect, height: row.height, isFirst: isFirst, isLast: isLast)
+        // 🔴 Set immediately before the stroke, never before the glyphs.
+        //
+        // `NSLayoutManager.drawGlyphs` calls `set` on each run's foreground
+        // colour, and `NSColor.set()` sets the stroke colour as well as the
+        // fill. A border colour chosen before that loop is therefore gone by the
+        // time the path is stroked, and the table is drawn in whatever colour
+        // the last glyph run happened to carry: blue under a row ending in a
+        // link, white under a row ending in plain text. That is exactly what
+        // "the table is blue in places and white in others" was.
+        MarkdownStyle.Palette.border.setStroke()
         border.stroke()
     }
 

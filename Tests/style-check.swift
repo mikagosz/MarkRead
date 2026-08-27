@@ -63,7 +63,7 @@ struct StyleCheck {
         // The colours P2-10 asked for.
         check("bold is coloured", "bold", in: "A **bold** word.", is: MarkdownStyle.Palette.emphasis!)
         check("italic is coloured", "slanted", in: "A *slanted* word.", is: MarkdownStyle.Palette.emphasis!)
-        check("a heading is coloured", "Heading", in: "# Heading", is: MarkdownStyle.Palette.heading)
+        check("a heading is coloured", "Heading", in: "# Heading", is: MarkdownStyle.Palette.heading(1))
         check("code is coloured", "swift", in: "Run `swift build` now.", is: MarkdownStyle.Palette.code!)
         check("a raw table row is coloured", "alpha", in: "| alpha | beta |\n|---|---|\n| c | d |",
               is: MarkdownStyle.Palette.tableRow!)
@@ -72,7 +72,7 @@ struct StyleCheck {
         // there. Each of these was the reason bold and italic stayed grey.
         let heading = "# Heading with **bold** inside"
         check("bold inside a heading keeps the heading colour", "bold", in: heading,
-              is: MarkdownStyle.Palette.heading)
+              is: MarkdownStyle.Palette.heading(1))
         // ...and is genuinely bold there, so the check above cannot pass just
         // because the emphasis was never seen.
         let boldInHeading = font(of: "bold", in: heading)
@@ -106,10 +106,63 @@ struct StyleCheck {
         }
 
         use(.xcode)
-        check("Like Xcode: headings carry no colour", "Heading", in: "# Heading", is: .labelColor)
-        check("Like Xcode: bold carries no colour", "bold", in: "A **bold** word.", is: .labelColor)
+        // 🔴 The measured half of this file. Every number below is a key from
+        // Xcode's own `Default (Dark).xccolortheme`, where body text is 10 pt —
+        // so a size is checked as a *ratio* against `bodySize`, which the reader
+        // can change. If one of these ever fails, read the theme file again
+        // before touching the constant: the point of the look is that it is
+        // copied, not tuned by eye.
+        check("Like Xcode: headings invent no colour", "Heading", in: "# Heading",
+              is: MarkdownStyle.Palette.text)
+        check("Like Xcode: bold invents no colour", "bold", in: "A **bold** word.",
+              is: MarkdownStyle.Palette.text)
         check("Like Xcode: code keeps its colour", "swift", in: "Run `swift build` now.",
               is: MarkdownStyle.Palette.code!)
+        // Positive control for the two checks above: "no invented colour" under
+        // this look is Xcode's own white, *not* `labelColor` — which is white at
+        // 0.85 and reads a shade grey beside the real thing. Without this, both
+        // checks would pass just as well if the palette had never changed.
+        check("Like Xcode: the body colour is Xcode's, not the system label colour",
+              MarkdownStyle.Palette.text != .labelColor)
+        // DVTMarkupTextPrimaryHeadingFont 24 / DVTMarkupTextNormalFont 10.
+        check("Like Xcode: H1 is 2.4x body",
+              font(of: "Heading", in: "# Heading")?.pointSize == (MarkdownStyle.bodySize * 2.4).rounded(),
+              "\(font(of: "Heading", in: "# Heading")?.pointSize ?? -1)")
+        // DVTMarkupTextSecondaryHeadingFont 18.
+        check("Like Xcode: H2 is 1.8x body",
+              font(of: "Heading", in: "## Heading")?.pointSize == (MarkdownStyle.bodySize * 1.8).rounded())
+        // DVTMarkupTextOtherHeadingFont 14 — one size for level three and below,
+        // not a ladder that keeps shrinking.
+        check("Like Xcode: H3 and H4 are the same 1.4x body",
+              font(of: "Heading", in: "### Heading")?.pointSize == (MarkdownStyle.bodySize * 1.4).rounded()
+              && font(of: "Heading", in: "#### Heading")?.pointSize
+                 == (MarkdownStyle.bodySize * 1.4).rounded())
+        // The fonts are `.AppleSystemUIFont`, not the Bold variant.
+        check("Like Xcode: a heading is not bold",
+              font(of: "Heading", in: "# Heading")?.fontDescriptor.symbolicTraits.contains(.bold) == false)
+        // DVTMarkupTextOtherHeadingColor — white at half alpha, where H1 is at
+        // full. Compared by alpha rather than by identity: the colour is dynamic.
+        check("Like Xcode: H3 is dimmer than H1",
+              (colour(of: "Heading", in: "### Heading")?.usingColorSpace(.sRGB)?.alphaComponent ?? 1) < 0.75)
+        // DVTMarkupTextCodeFont 10 — the same size as body, where MarkRead's own
+        // look sets code a point smaller.
+        check("Like Xcode: code is the same size as body",
+              font(of: "swift", in: "Run `swift build` now.")?.pointSize == MarkdownStyle.bodySize)
+        // Not from the theme file — that has no spacing key. From
+        // `SourceEditorLayoutManager.calculateLineSpacing`: Xcode renders
+        // markdown in the source editor, one source line per line, and adds
+        // `ceil(font.leading)` and nothing else. The gap between two blocks is
+        // the blank line in the file, which this program also has.
+        check("Like Xcode: no invented paragraph spacing",
+              MarkdownStyle.paragraph.paragraphSpacing == 0,
+              "\(MarkdownStyle.paragraph.paragraphSpacing)")
+        check("Like Xcode: line spacing is the font's own leading",
+              MarkdownStyle.paragraph.lineSpacing == ceil(MarkdownStyle.body.leading),
+              "\(MarkdownStyle.paragraph.lineSpacing)")
+        // Xcode's theme has no blockquote key at all — a quote is prose, and the
+        // dimmed `>` in front is what tells it apart.
+        check("Like Xcode: a quote is not dimmed", "Ważne", in: "> Ważne: coś tam",
+              is: MarkdownStyle.Palette.text)
 
         use(.plain)
         check("Plain: headings carry no colour", "Heading", in: "# Heading", is: .labelColor)
@@ -121,7 +174,14 @@ struct StyleCheck {
 
         use(.markRead)
         check("switching back restores the accent", "Heading", in: "# Heading",
-              is: MarkdownStyle.Palette.heading)
+              is: MarkdownStyle.Palette.heading(1))
+        // Positive control for the two spacing checks above: MarkRead's own look
+        // still sets its own spacing, so "zero" under Xcode is a decision and
+        // not a value that went missing everywhere.
+        check("MarkRead keeps its own paragraph spacing",
+              MarkdownStyle.paragraph.paragraphSpacing == 6)
+        check("MarkRead keeps a dimmed quote", "Ważne", in: "> Ważne: coś tam",
+              is: .secondaryLabelColor)
 
         // The code face. Every family the picker offers has to be fixed-pitch,
         // and anything else has to be refused rather than merely not offered —

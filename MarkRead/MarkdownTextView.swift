@@ -36,6 +36,11 @@ final class LiveMarkdownTextView: NSTextView {
     var onFileDrop: ((URL) -> Void)?
     /// Draws rendered tables over the space their hidden source lines reserve.
     var drawTables: ((NSRect) -> Void)?
+
+    /// Draws the box behind a fenced code block. Separate from `drawTables`
+    /// because it has to land *under* the glyphs, and `draw(_:)` runs after
+    /// them.
+    var drawCodeBoxes: ((NSRect) -> Void)?
     /// Links inside a rendered table: its glyphs are suppressed, so the normal
     /// hit test has nothing to find there.
     var tableLink: ((NSPoint) -> URL?)?
@@ -46,6 +51,13 @@ final class LiveMarkdownTextView: NSTextView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         drawTables?(dirtyRect)
+    }
+
+    /// The one hook that runs before the text is drawn. A code block's box is
+    /// background — putting it in `draw(_:)` would paint it over the code.
+    override func drawBackground(in rect: NSRect) {
+        super.drawBackground(in: rect)
+        drawCodeBoxes?(rect)
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -246,6 +258,9 @@ struct MarkdownEditor: NSViewRepresentable {
         context.coordinator.scrollView = scrollView
         bind(context.coordinator, textView)
         layout.delegate = context.coordinator
+        textView.drawCodeBoxes = { [weak coordinator = context.coordinator] rect in
+            coordinator?.drawCodeBoxes(in: rect)
+        }
         textView.drawTables = { [weak coordinator = context.coordinator] rect in
             coordinator?.drawTables(in: rect)
         }
@@ -833,6 +848,73 @@ struct MarkdownEditor: NSViewRepresentable {
             lineRectsCache = result
             lineRectsKey = visible
             return result
+        }
+
+        // MARK: - Code blocks
+
+        /// True for a line that is inside a fenced block or is one of its fences.
+        private func isCodeLine(_ line: Int) -> Bool {
+            guard line >= 0, line < map.lines.count else { return false }
+            switch map.lines[line].kind {
+            case .fence, .code: return true
+            case .normal, .frontMatter: return false
+            }
+        }
+
+        /// Draws one rounded box per fenced code block, the way Xcode draws one.
+        ///
+        /// Until 0.2.7 a code block had no box at all: every run carried its own
+        /// `.backgroundColor`, so the fill stopped where each line's text
+        /// stopped and the block was a stack of ragged strips instead of a
+        /// shape. The run background stays — same colour, so it cannot show —
+        /// and this puts the shape underneath it.
+        ///
+        /// Only the laid-out lines are looked at, so this stays cheap on a long
+        /// document. A block that runs off the top or bottom of the window has
+        /// its box extended past the edge rather than closed there, otherwise
+        /// scrolling through a long block draws a border across the middle of
+        /// the screen.
+        func drawCodeBoxes(in dirtyRect: NSRect) {
+            let rects = lineRects()
+            guard !rects.isEmpty else { return }
+            let radius = TableLayout.cornerRadius
+
+            var lines = rects.keys.filter { isCodeLine($0) }.sorted()
+            while let first = lines.first {
+                var last = first
+                lines.removeFirst()
+                while let next = lines.first, next == last + 1 {
+                    last = next
+                    lines.removeFirst()
+                }
+
+                var box = CGRect.null
+                for line in first ... last {
+                    guard let rect = rects[line] else { continue }
+                    box = box.union(rect)
+                }
+                guard !box.isNull else { continue }
+                // Off-screen ends: push the edge (and its corners) out of sight.
+                // A closed end gets Xcode's breathing room instead.
+                let padding: CGFloat = 4
+                if isCodeLine(first - 1) {
+                    box.origin.y -= radius + 2
+                    box.size.height += radius + 2
+                } else {
+                    box.origin.y -= padding
+                    box.size.height += padding
+                }
+                box.size.height += isCodeLine(last + 1) ? radius + 2 : padding
+                guard box.intersects(dirtyRect) else { continue }
+
+                let path = NSBezierPath(roundedRect: box.insetBy(dx: 0.5, dy: 0.5),
+                                        xRadius: radius, yRadius: radius)
+                MarkdownStyle.Palette.codeBackground.setFill()
+                path.fill()
+                MarkdownStyle.Palette.border.setStroke()
+                path.lineWidth = 1
+                path.stroke()
+            }
         }
 
         func drawTables(in dirtyRect: NSRect) {
