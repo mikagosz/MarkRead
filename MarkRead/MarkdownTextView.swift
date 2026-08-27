@@ -233,7 +233,11 @@ struct MarkdownEditor: NSViewRepresentable {
                                   height: CGFloat.greatestFiniteMagnitude)
         textView.textContainerInset = NSSize(width: 24, height: 20)
         textView.typingAttributes = MarkdownStyle.baseAttributes
-        textView.backgroundColor = .textBackgroundColor
+        textView.backgroundColor = MarkdownStyle.Palette.editorBackground
+        textView.insertionPointColor = MarkdownStyle.Palette.caret
+        textView.selectedTextAttributes = [
+            .backgroundColor: MarkdownStyle.Palette.selectionBackground
+        ]
 
         // Every one of these rewrites the user's characters behind their back.
         // In a markdown editor that is data loss: "--" becomes an em dash, plain
@@ -252,7 +256,7 @@ struct MarkdownEditor: NSViewRepresentable {
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
         scrollView.drawsBackground = true
-        scrollView.backgroundColor = .textBackgroundColor
+        scrollView.backgroundColor = MarkdownStyle.Palette.editorBackground
 
         context.coordinator.textView = textView
         context.coordinator.scrollView = scrollView
@@ -462,6 +466,15 @@ struct MarkdownEditor: NSViewRepresentable {
         func restyleForAppearance() {
             guard let textView, let storage = textView.textStorage else { return }
             textView.typingAttributes = MarkdownStyle.baseAttributes
+            // The ground moves with the look: `claudeDark` carries its own, the
+            // rest follow the Mac. Missing these leaves the new palette's text
+            // on the old palette's background.
+            textView.backgroundColor = MarkdownStyle.Palette.editorBackground
+            textView.enclosingScrollView?.backgroundColor = MarkdownStyle.Palette.editorBackground
+            textView.insertionPointColor = MarkdownStyle.Palette.caret
+            textView.selectedTextAttributes = [
+                .backgroundColor: MarkdownStyle.Palette.selectionBackground
+            ]
             tableCache.removeAll(keepingCapacity: true)
             tablesByLine.removeAll(keepingCapacity: true)
             styledRange = nil

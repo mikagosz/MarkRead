@@ -172,6 +172,37 @@ struct StyleCheck {
         check("Plain: a heading is still bigger than body text",
               (font(of: "Heading", in: "# Heading")?.pointSize ?? 0) > MarkdownStyle.bodySize)
 
+        // The Claude palette, added 2026-08-27 from [U]'s `ClaudeDarkTheme.swift`.
+        use(.claudeDark)
+        // 🔴 The one thing that makes this look different in kind from the other
+        // three: it is a *theme*, so it keeps its own dark ground with the Mac
+        // set to light. Checked under the light appearance on purpose — under
+        // the dark one it would pass even if the look followed the system.
+        NSAppearance(named: .aqua)?.performAsCurrentDrawingAppearance {
+            check("Dark Claude color: stays dark under a light Mac",
+                  MarkdownStyle.Palette.editorBackground.usingColorSpace(.sRGB)?
+                      .brightnessComponent ?? 1 < 0.2,
+                  "\(MarkdownStyle.Palette.editorBackground)")
+            check("Dark Claude color: its text stays light under a light Mac",
+                  MarkdownStyle.Palette.text.usingColorSpace(.sRGB)?
+                      .brightnessComponent ?? 0 > 0.8)
+        }
+        // The palette sets an inline span in terracotta and a fenced block in
+        // grey — two different keys, `cdInlineCodeText` and `cdCodeText`. They
+        // were the same colour until the two styles were told apart.
+        check("Dark Claude color: a fenced block is not the colour of an inline span",
+              MarkdownStyle.Palette.blockCode != MarkdownStyle.Palette.code,
+              "\(String(describing: MarkdownStyle.Palette.blockCode))")
+        check("Dark Claude color: an inline span really is the terracotta one",
+              "swift", in: "Run `swift build` now.", is: MarkdownStyle.Palette.code!)
+        // Four heading colours, stepping down. The palette gives each of the
+        // first three its own and lumps the rest together.
+        let levels = (1 ... 5).map { MarkdownStyle.Palette.heading($0) }
+        check("Dark Claude color: headings step down through four values",
+              Set(levels.map { $0.usingColorSpace(.sRGB)!.brightnessComponent }).count == 4)
+        check("Dark Claude color: level four and five share one",
+              levels[3] == levels[4])
+
         use(.markRead)
         check("switching back restores the accent", "Heading", in: "# Heading",
               is: MarkdownStyle.Palette.heading(1))
@@ -182,6 +213,11 @@ struct StyleCheck {
               MarkdownStyle.paragraph.paragraphSpacing == 6)
         check("MarkRead keeps a dimmed quote", "Ważne", in: "> Ważne: coś tam",
               is: .secondaryLabelColor)
+        // Positive control for the theme checks above: every other look hands
+        // back the system's ground, so "dark under a light Mac" is something
+        // `claudeDark` does and not something every look does.
+        check("MarkRead follows the system's background",
+              MarkdownStyle.Palette.editorBackground == .textBackgroundColor)
 
         // The code face. Every family the picker offers has to be fixed-pitch,
         // and anything else has to be refused rather than merely not offered —
