@@ -101,6 +101,68 @@ enum MarkdownStyle {
         }
     }
 
+
+    /// The Claude Code palette, as supplied by [U] in `ClaudeDarkTheme.swift`.
+    ///
+    /// Kept as hex literals rather than as decomposed components so the numbers
+    /// can still be read against the file they came from. The source file is a
+    /// SwiftUI `Color` extension and is **not** part of this project: MarkRead
+    /// styles an `NSTextStorage`, which takes `NSColor`, and half of that palette
+    /// has no consumer here at all (syntax colours inside code blocks, diff and
+    /// status colours, hover and selection states). What landed is below; what
+    /// did not is written down in the project note rather than half-wired.
+    ///
+    /// 🔴 This look is a **theme, not an appearance**: it paints its own dark
+    /// colours whether the Mac is set to light or dark, which is why it also owns
+    /// the editor's background. The other three looks follow the system and must
+    /// keep doing so.
+    enum ClaudeTheme {
+        static let background = hex(0x1A1A1A)
+        static let elevated = hex(0x262626)
+
+        static let textPrimary = hex(0xECECEC)
+        static let textSecondary = hex(0xB0B0B0)
+        static let textMuted = hex(0x7A7A7A)
+
+        static let heading1 = hex(0xF5F5F5)
+        static let heading2 = hex(0xEDEDED)
+        static let heading3 = hex(0xE3E3E3)
+        static let headingRest = hex(0xD6D6D6)
+
+        static let bold = hex(0xFFFFFF)
+        static let inlineCodeText = hex(0xE8977B)
+        static let inlineCodeBg = hex(0x2A2320)
+        /// `cdCodeText` — a fenced block, which the palette deliberately sets in
+        /// a plain grey rather than in the terracotta it gives an inline span.
+        static let codeText = hex(0xE0E0E0)
+        static let link = hex(0x6BAAF7)
+        static let strikethrough = hex(0x8A8A8A)
+
+        static let codeBg = hex(0x1E1E1E)
+        static let codeBorder = hex(0x333333)
+        /// `cdCodeString` — the nearest thing in the palette to "the language
+        /// name on a fence", which is what Xcode colours with its string colour.
+        static let codeString = hex(0x9CDCA4)
+
+        static let blockquoteText = hex(0xB0B0B0)
+        static let listBullet = hex(0x8A8A8A)
+        static let divider = hex(0x333333)
+
+        static let tableHeaderBg = hex(0x262626)
+        static let tableBorder = hex(0x333333)
+
+        /// The brand accent, used here for a callout's label — the one place
+        /// MarkRead already puts an accent colour.
+        static let accent = hex(0xDA7756)
+
+        private static func hex(_ value: UInt32) -> NSColor {
+            NSColor(srgbRed: CGFloat((value >> 16) & 0xFF) / 255,
+                    green: CGFloat((value >> 8) & 0xFF) / 255,
+                    blue: CGFloat(value & 0xFF) / 255,
+                    alpha: 1)
+        }
+    }
+
     // MARK: - Fonts
 
     /// What the reader picked in Settings, kept in `UserDefaults` and cached in
@@ -127,6 +189,10 @@ enum MarkdownStyle {
         /// No colour this program invented. Links keep theirs, headings are told
         /// apart by size, and that is the lot.
         case plain
+        /// The Claude Code palette — see `ClaudeTheme`. Unlike the other three
+        /// this one is a theme rather than an appearance: it paints its own dark
+        /// colours in light mode too, and owns the editor's background.
+        case claudeDark
 
         var id: String { rawValue }
 
@@ -135,6 +201,7 @@ enum MarkdownStyle {
             case .markRead: "MarkRead"
             case .xcode: "Like Xcode"
             case .plain: "Plain"
+            case .claudeDark: "Dark Claude color"
             }
         }
 
@@ -143,6 +210,7 @@ enum MarkdownStyle {
             case .markRead: "Headings in the system accent, emphasis and code coloured."
             case .xcode: "Matched to Xcode's own theme: three heading sizes, no bold, code in a box."
             case .plain: "No colour except links. Headings differ by size only."
+            case .claudeDark: "The Claude Code palette. Dark whatever the Mac is set to."
             }
         }
     }
@@ -330,6 +398,7 @@ enum MarkdownStyle {
         static var text: NSColor {
             switch look {
             case .xcode: XcodeTheme.normal
+            case .claudeDark: ClaudeTheme.textPrimary
             case .markRead, .plain: .labelColor
             }
         }
@@ -343,21 +412,48 @@ enum MarkdownStyle {
                 ? XcodeTheme.normal.withAlphaComponent(XcodeTheme.otherHeadingAlpha)
                 : XcodeTheme.normal
             case .plain: .labelColor
+            case .claudeDark: switch level {
+                case 1: ClaudeTheme.heading1
+                case 2: ClaudeTheme.heading2
+                case 3: ClaudeTheme.heading3
+                default: ClaudeTheme.headingRest
+                }
             }
         }
-        /// Inline code and fenced blocks.
+        /// An inline code span, `like this`.
+        ///
+        /// Split from `blockCode` because the Claude palette splits them: an
+        /// inline span is terracotta, a fenced block is grey. The other looks set
+        /// both the same and simply answer twice.
         static var code: NSColor? {
             switch look {
             case .markRead: .systemPink
             case .xcode: XcodeTheme.inlineCode
+            case .claudeDark: ClaudeTheme.inlineCodeText
             case .plain: nil
             }
         }
-        /// The fill behind code. Xcode has its own; the other looks borrow the
-        /// system's faintest fill.
+        /// A fenced code block's text.
+        static var blockCode: NSColor? {
+            switch look {
+            case .claudeDark: ClaudeTheme.codeText
+            case .markRead, .xcode, .plain: code
+            }
+        }
+        /// The fill behind an inline span — the block's ground is drawn as a box
+        /// instead, see `codeBackground`.
+        static var inlineCodeBackground: NSColor {
+            switch look {
+            case .claudeDark: ClaudeTheme.inlineCodeBg
+            case .markRead, .xcode, .plain: codeBackground
+            }
+        }
+        /// The fill behind a code block. Xcode has its own; the other looks borrow
+        /// the system's faintest fill.
         static var codeBackground: NSColor {
             switch look {
             case .xcode: XcodeTheme.markupBackground
+            case .claudeDark: ClaudeTheme.codeBg
             case .markRead, .plain: .quaternarySystemFill
             }
         }
@@ -365,6 +461,7 @@ enum MarkdownStyle {
         static var border: NSColor {
             switch look {
             case .xcode: XcodeTheme.markupBorder
+            case .claudeDark: ClaudeTheme.codeBorder
             case .markRead, .plain: .separatorColor
             }
         }
@@ -373,6 +470,7 @@ enum MarkdownStyle {
         static var infoString: NSColor? {
             switch look {
             case .xcode: XcodeTheme.infoString
+            case .claudeDark: ClaudeTheme.codeString
             case .markRead, .plain: nil
             }
         }
@@ -385,6 +483,7 @@ enum MarkdownStyle {
         static var quote: NSColor {
             switch look {
             case .xcode: text
+            case .claudeDark: ClaudeTheme.blockquoteText
             case .markRead, .plain: .secondaryLabelColor
             }
         }
@@ -393,6 +492,7 @@ enum MarkdownStyle {
         static var listMarker: NSColor {
             switch look {
             case .xcode: text
+            case .claudeDark: ClaudeTheme.listBullet
             case .markRead, .plain: .secondaryLabelColor
             }
         }
@@ -401,6 +501,7 @@ enum MarkdownStyle {
         static var link: NSColor {
             switch look {
             case .xcode: XcodeTheme.link
+            case .claudeDark: ClaudeTheme.link
             case .markRead, .plain: .linkColor
             }
         }
@@ -409,6 +510,9 @@ enum MarkdownStyle {
         static var emphasis: NSColor? {
             switch look {
             case .markRead: .systemIndigo
+            // The palette gives bold its own white; italic is left alone, so
+            // that only one of the two carries a colour rather than both.
+            case .claudeDark: ClaudeTheme.bold
             case .xcode, .plain: nil
             }
         }
@@ -419,7 +523,7 @@ enum MarkdownStyle {
         static var tableRow: NSColor? {
             switch look {
             case .markRead: .systemTeal
-            case .xcode, .plain: nil
+            case .claudeDark, .xcode, .plain: nil
             }
         }
         /// The header row of a *drawn* table.
@@ -433,7 +537,52 @@ enum MarkdownStyle {
         static var tableHeaderFill: NSColor {
             switch look {
             case .xcode: XcodeTheme.markupBackground
+            case .claudeDark: ClaudeTheme.tableHeaderBg
             case .markRead, .plain: .quaternarySystemFill
+            }
+        }
+        /// What the editor is drawn on.
+        ///
+        /// Only `claudeDark` names one: it is a theme and carries its own ground.
+        /// The others hand back the system's text background, which follows the
+        /// Mac's appearance the way they do.
+        static var editorBackground: NSColor {
+            switch look {
+            case .claudeDark: ClaudeTheme.background
+            case .markRead, .xcode, .plain: .textBackgroundColor
+            }
+        }
+        /// The caret, and the ground under selected text.
+        ///
+        /// These matter for `claudeDark` in particular: with the Mac set to
+        /// light, a system selection paints a pale block behind pale text on this
+        /// look's dark ground, and the selected words disappear.
+        static var caret: NSColor {
+            switch look {
+            case .claudeDark: ClaudeTheme.textPrimary
+            case .markRead, .xcode, .plain: .textColor
+            }
+        }
+        static var selectionBackground: NSColor {
+            switch look {
+            case .claudeDark: ClaudeTheme.elevated
+            case .markRead, .xcode, .plain: .selectedTextBackgroundColor
+            }
+        }
+        /// Struck-out text.
+        static var strikethrough: NSColor {
+            switch look {
+            case .claudeDark: ClaudeTheme.strikethrough
+            case .markRead, .xcode, .plain: .secondaryLabelColor
+            }
+        }
+        /// The `[!note]` label of an Obsidian callout — the one place this
+        /// program already puts an accent colour, so the palette's brand accent
+        /// goes here.
+        static var calloutLabel: NSColor {
+            switch look {
+            case .claudeDark: ClaudeTheme.accent
+            case .markRead, .xcode, .plain: .controlAccentColor
             }
         }
         /// Whether a drawn table's header row is set in bold.
@@ -511,7 +660,7 @@ enum MarkdownStyle {
             case .strikethrough:
                 storage.addAttributes([
                     .strikethroughStyle: NSUnderlineStyle.single.rawValue,
-                    .foregroundColor: NSColor.secondaryLabelColor,
+                    .foregroundColor: Palette.strikethrough,
                 ], range: r)
 
             case .highlight:
@@ -521,7 +670,7 @@ enum MarkdownStyle {
                 storage.addAttributes([
                     .font: mono,
                     .foregroundColor: Palette.code ?? Palette.text,
-                    .backgroundColor: Palette.codeBackground,
+                    .backgroundColor: Palette.inlineCodeBackground,
                     .markReadCode: true,
                 ], range: r)
 
@@ -529,7 +678,7 @@ enum MarkdownStyle {
                 // No `.backgroundColor` here on purpose — see `Decoration.Style`.
                 storage.addAttributes([
                     .font: mono,
-                    .foregroundColor: Palette.code ?? Palette.text,
+                    .foregroundColor: Palette.blockCode ?? Palette.text,
                     .markReadCode: true,
                 ], range: r)
 
@@ -569,7 +718,7 @@ enum MarkdownStyle {
 
             case .calloutLabel:
                 storage.addAttributes([
-                    .foregroundColor: NSColor.controlAccentColor,
+                    .foregroundColor: Palette.calloutLabel,
                     .font: adding(.bold, to: body),
                 ], range: r)
 
