@@ -82,8 +82,18 @@ nonisolated enum MarkdownScanner {
         case .frontMatter:
             out.append(Decoration(range: content, style: .frontMatter))
             return
-        case .code, .fence:
-            out.append(Decoration(range: content, style: .code))
+        case .code:
+            out.append(Decoration(range: content, style: .codeBlock))
+            return
+        case .fence:
+            out.append(Decoration(range: content, style: .codeBlock))
+            // Xcode's preview shows a box and a language name, never the
+            // backticks that produced them. They are hidden the way every other
+            // marker is — glyphs suppressed, characters untouched, and the caret
+            // on that line brings them back.
+            let (run, info) = fenceParts(text, content)
+            if let run { out.append(Decoration(range: run, style: .hiddenMarker)) }
+            if let info { out.append(Decoration(range: info, style: .infoString)) }
             return
         case .normal:
             break
@@ -258,4 +268,31 @@ nonisolated enum MarkdownScanner {
             }
         }
     }
+
+    /// A fence line split into its run of backticks (or tildes) and the
+    /// language name after it.
+    ///
+    /// A closing fence carries nothing after its run, so the second half comes
+    /// back nil there without this needing to know which of the two it is
+    /// looking at.
+    private static func fenceParts(_ text: NSString, _ line: NSRange) -> (NSRange?, NSRange?) {
+        var index = line.location
+        let end = NSMaxRange(line)
+        while index < end, isBlank(text.character(at: index)) { index += 1 }
+        guard index < end else { return (nil, nil) }
+        let marker = text.character(at: index)
+        guard marker == 96 || marker == 126 else { return (nil, nil) }   // ` or ~
+        let runStart = index
+        while index < end, text.character(at: index) == marker { index += 1 }
+        let run = NSRange(location: runStart, length: index - runStart)
+
+        while index < end, isBlank(text.character(at: index)) { index += 1 }
+        var last = end
+        while last > index, isBlank(text.character(at: last - 1)) { last -= 1 }
+        guard last > index else { return (run, nil) }
+        return (run, NSRange(location: index, length: last - index))
+    }
+
+    private static func isBlank(_ char: unichar) -> Bool { char == 32 || char == 9 }
+
 }

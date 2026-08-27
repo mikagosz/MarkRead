@@ -28,6 +28,16 @@ nonisolated struct Decoration: Equatable {
         case highlight
         /// Inline code span or a line inside a fenced block.
         case code
+        /// A line inside a fenced block, or one of its fences.
+        ///
+        /// Separate from `code` for one reason: an inline span paints its own
+        /// background, a block must **not**. The block's background is a drawn
+        /// box, and a per-run background under it paints a second, differently
+        /// shaped rectangle that shows as a strip sticking out of the box.
+        case codeBlock
+        /// The language name on a fence line — ```` ```swift ````. Xcode is the
+        /// only look that colours it; everywhere else it stays code-coloured.
+        case infoString
         case link(String)
         case wikiLink(String)
         case listMarker

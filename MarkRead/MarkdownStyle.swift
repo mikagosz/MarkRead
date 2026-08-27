@@ -29,6 +29,78 @@ enum MarkdownStyle {
         return rest.removingPercentEncoding ?? rest
     }
 
+
+    // MARK: - Xcode's own numbers
+
+    /// Xcode's markdown appearance, read out of Xcode itself.
+    ///
+    /// Not eyeballed from a screenshot and not invented here: every value below
+    /// is a key from
+    /// `Xcode.app/Contents/SharedFrameworks/DVTUserInterfaceKit.framework/Resources/`
+    /// `FontAndColorThemes/Default (Dark).xccolortheme` and its `(Light)` twin,
+    /// under `DVTMarkupText*`. That is the file Xcode renders a `.md` file from,
+    /// so matching it is the only thing "looks like Xcode" can honestly mean.
+    ///
+    /// Xcode sets body text at **10 pt**, so the sizes are kept here as *ratios*
+    /// against body rather than as points — the reader picks a size in Settings
+    /// and the proportions have to survive it. 24/10, 18/10 and 14/10.
+    ///
+    /// 🔴 These are copied values. If they are ever wrong, the fix is to read the
+    /// theme file again, not to nudge them until a screenshot looks close.
+    enum XcodeTheme {
+        /// `DVTMarkupTextPrimaryHeadingFont` — 24 pt against a 10 pt body.
+        static let h1Scale: CGFloat = 2.4
+        /// `DVTMarkupTextSecondaryHeadingFont` — 18 pt.
+        static let h2Scale: CGFloat = 1.8
+        /// `DVTMarkupTextOtherHeadingFont` — 14 pt, and it is *one* size for
+        /// every level from three down, not a ladder.
+        static let otherHeadingScale: CGFloat = 1.4
+        /// `DVTMarkupTextCodeFont` — 10 pt, the same size as the body. MarkRead's
+        /// own look sets code a point smaller; Xcode does not.
+        static let codeScale: CGFloat = 1.0
+
+        /// Headings are `.AppleSystemUIFont`, i.e. **regular**. Xcode does not
+        /// set them bold; the size is what tells them apart.
+        static let headingWeight: NSFont.Weight = .regular
+
+        /// `DVTMarkupTextOtherHeadingColor` — white at half alpha. H1 and H2 are
+        /// at full alpha, H3 and below are not.
+        static let otherHeadingAlpha: CGFloat = 0.5
+        /// `DVTMarkupTextInlineCodeColor` — 70% alpha over the text colour.
+        static let codeAlpha: CGFloat = 0.7
+
+        /// `DVTMarkupTextNormalColor`: pure white in the dark theme, pure black
+        /// in the light one — *not* `labelColor`, which is white at 0.85.
+        static let normal = dynamic(dark: (1, 1, 1, 1), light: (0, 0, 0, 1))
+        /// `DVTMarkupTextInlineCodeColor`.
+        static let inlineCode = dynamic(dark: (1, 1, 1, codeAlpha), light: (0, 0, 0, codeAlpha))
+        /// `DVTMarkupTextLinkColor`.
+        static let link = dynamic(dark: (0.33, 0.247124, 0.894195, 1),
+                                  light: (0.055, 0.055, 1, 1))
+        /// `DVTMarkupTextBackgroundColor` — the fill behind a code block.
+        static let markupBackground = dynamic(dark: (0.18856, 0.195, 0.22444, 1),
+                                              light: (0.96, 0.96, 0.96, 1))
+        /// `DVTMarkupTextBorderColor` — the line around it, and around a table.
+        static let markupBorder = dynamic(dark: (0.253475, 0.2594, 0.286485, 1),
+                                          light: (0.8832, 0.8832, 0.8832, 1))
+        /// `xcode.syntax.string` — the colour Xcode puts on a fenced block's
+        /// language name.
+        static let infoString = dynamic(dark: (0.989117, 0.41558, 0.365684, 1),
+                                        light: (0.77, 0.102, 0.086, 1))
+
+        /// One colour that resolves per appearance, so the light theme's values
+        /// are used in light mode instead of being dimmed versions of the dark
+        /// ones.
+        private static func dynamic(dark: (CGFloat, CGFloat, CGFloat, CGFloat),
+                                    light: (CGFloat, CGFloat, CGFloat, CGFloat)) -> NSColor {
+            NSColor(name: nil) { appearance in
+                let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+                let c = isDark ? dark : light
+                return NSColor(srgbRed: c.0, green: c.1, blue: c.2, alpha: c.3)
+            }
+        }
+    }
+
     // MARK: - Fonts
 
     /// What the reader picked in Settings, kept in `UserDefaults` and cached in
@@ -48,8 +120,9 @@ enum MarkdownStyle {
         /// What MarkRead settled on by itself: the system accent on headings,
         /// colour on emphasis and code.
         case markRead
-        /// Xcode's markdown preview: headings and emphasis carry no colour at
-        /// all, and the table header is the coloured thing instead.
+        /// Xcode's markdown preview, matched against Xcode's own theme file
+        /// rather than against a screenshot — see `XcodeTheme`. Three heading
+        /// sizes, none of them bold, no colour on emphasis, code in a box.
         case xcode
         /// No colour this program invented. Links keep theirs, headings are told
         /// apart by size, and that is the lot.
@@ -68,7 +141,7 @@ enum MarkdownStyle {
         var detail: String {
             switch self {
             case .markRead: "Headings in the system accent, emphasis and code coloured."
-            case .xcode: "No colour on headings or emphasis; the table header carries it instead."
+            case .xcode: "Matched to Xcode's own theme: three heading sizes, no bold, code in a box."
             case .plain: "No colour except links. Headings differ by size only."
             }
         }
@@ -191,7 +264,9 @@ enum MarkdownStyle {
     /// Which is why Settings offers a face for code, and offers only fixed-pitch
     /// ones — `Appearance.storedMonoFamily` refuses anything else outright.
     static var mono: NSFont {
-        let size = bodySize - 1
+        // Xcode sets code at the same size as body; MarkRead's own look drops it
+        // a point. `XcodeTheme.codeScale` is the measured 10/10.
+        let size = look == .xcode ? (bodySize * XcodeTheme.codeScale).rounded() : bodySize - 1
         guard let monoFamily,
               let font = NSFont(descriptor: NSFontDescriptor(fontAttributes: [.family: monoFamily]),
                                 size: size)
@@ -209,6 +284,16 @@ enum MarkdownStyle {
     static var monoAdvance: CGFloat { ("0" as NSString).size(withAttributes: [.font: mono]).width }
 
     static func heading(_ level: Int) -> NSFont {
+        // Xcode has three heading sizes, not five, and sets none of them bold —
+        // see `XcodeTheme`. MarkRead's own ladder is the five-step one.
+        if look == .xcode {
+            let scale: CGFloat = switch level {
+            case 1: XcodeTheme.h1Scale
+            case 2: XcodeTheme.h2Scale
+            default: XcodeTheme.otherHeadingScale
+            }
+            return bodyFont(ofSize: (bodySize * scale).rounded(), weight: XcodeTheme.headingWeight)
+        }
         let scale: CGFloat = switch level {
         case 1: 1.85
         case 2: 1.5
@@ -236,25 +321,91 @@ enum MarkdownStyle {
     /// means "leave whatever colour the text already had", which is not the same
     /// as painting it `labelColor`: a link inside that run keeps its own.
     enum Palette {
-        /// Every heading level. Where it follows the accent it does so rather
-        /// than fixing a hue that would clash with somebody else's.
-        static var heading: NSColor {
+        /// The colour plain body text is set in, and the one `paintIfPlain`
+        /// treats as "nothing has claimed this run yet".
+        ///
+        /// Under `.xcode` this is Xcode's `DVTMarkupTextNormalColor` — pure
+        /// white or pure black — and deliberately **not** `labelColor`, which is
+        /// white at 0.85 and reads a shade grey next to the real thing.
+        static var text: NSColor {
             switch look {
-            case .markRead: .controlAccentColor
-            case .xcode, .plain: .labelColor
+            case .xcode: XcodeTheme.normal
+            case .markRead, .plain: .labelColor
             }
         }
-        /// Inline code and fenced blocks. The background tint alone is easy to
-        /// miss on a busy line.
+        /// A heading of this level. Xcode gives level three and below half alpha
+        /// and leaves one and two at full; the other looks colour every level
+        /// the same.
+        static func heading(_ level: Int) -> NSColor {
+            switch look {
+            case .markRead: .controlAccentColor
+            case .xcode: level >= 3
+                ? XcodeTheme.normal.withAlphaComponent(XcodeTheme.otherHeadingAlpha)
+                : XcodeTheme.normal
+            case .plain: .labelColor
+            }
+        }
+        /// Inline code and fenced blocks.
         static var code: NSColor? {
             switch look {
             case .markRead: .systemPink
-            case .xcode: .systemPink
+            case .xcode: XcodeTheme.inlineCode
             case .plain: nil
             }
         }
-        /// Bold and italic. Quieter than the heading accent on purpose — a page
-        /// where every emphasised word shouts reads worse than a flat one.
+        /// The fill behind code. Xcode has its own; the other looks borrow the
+        /// system's faintest fill.
+        static var codeBackground: NSColor {
+            switch look {
+            case .xcode: XcodeTheme.markupBackground
+            case .markRead, .plain: .quaternarySystemFill
+            }
+        }
+        /// The line around a code block and around a table.
+        static var border: NSColor {
+            switch look {
+            case .xcode: XcodeTheme.markupBorder
+            case .markRead, .plain: .separatorColor
+            }
+        }
+        /// A fenced block's language name — the one thing Xcode colours inside a
+        /// code block, in the same red it uses for a string literal.
+        static var infoString: NSColor? {
+            switch look {
+            case .xcode: XcodeTheme.infoString
+            case .markRead, .plain: nil
+            }
+        }
+        /// A blockquote's text.
+        ///
+        /// Xcode's theme has no blockquote key at all: a quote is `markupProse`
+        /// like any other paragraph and carries the ordinary text colour. The
+        /// `>` in front of it stays a marker, dimmed like every other marker,
+        /// which is what tells the quote apart there.
+        static var quote: NSColor {
+            switch look {
+            case .xcode: text
+            case .markRead, .plain: .secondaryLabelColor
+            }
+        }
+        /// A list's bullet or number. Xcode sets them in the same colour as the
+        /// item's text; MarkRead's own look steps them back so the text leads.
+        static var listMarker: NSColor {
+            switch look {
+            case .xcode: text
+            case .markRead, .plain: .secondaryLabelColor
+            }
+        }
+        /// Links. Xcode's markdown link colour is its own value, several shades
+        /// more violet than the system's.
+        static var link: NSColor {
+            switch look {
+            case .xcode: XcodeTheme.link
+            case .markRead, .plain: .linkColor
+            }
+        }
+        /// Bold and italic. Xcode puts no colour on either — only weight and
+        /// slant — and neither does `plain`.
         static var emphasis: NSColor? {
             switch look {
             case .markRead: .systemIndigo
@@ -262,7 +413,7 @@ enum MarkdownStyle {
             }
         }
         /// A table row *as raw markdown*, which is the only state this colour is
-        /// ever seen in: the drawn table puts its cells back to `labelColor`,
+        /// ever seen in: the drawn table puts its cells back to the body colour,
         /// because a whole table tinted in one hue reads as faded rather than as
         /// a table. See `MarkdownTableRenderer.useBodyColour`.
         static var tableRow: NSColor? {
@@ -271,13 +422,18 @@ enum MarkdownStyle {
             case .xcode, .plain: nil
             }
         }
-        /// The header row of a *drawn* table — the one thing Xcode colours and
-        /// MarkRead did not.
-        static var tableHeader: NSColor? {
+        /// The header row of a *drawn* table.
+        ///
+        /// 🔴 Was `.systemPink` under `.xcode` until 2026-08-27, on the guess
+        /// that "Xcode colours the table header". It does not — the theme file
+        /// has no such key, and the pink was this program's invention wearing
+        /// Xcode's name. Nothing here is coloured now.
+        static var tableHeader: NSColor? { nil }
+        /// The fill behind a drawn table's header row.
+        static var tableHeaderFill: NSColor {
             switch look {
-            case .markRead: nil
-            case .xcode: .systemPink
-            case .plain: nil
+            case .xcode: XcodeTheme.markupBackground
+            case .markRead, .plain: .quaternarySystemFill
             }
         }
         /// Whether a drawn table's header row is set in bold.
@@ -288,13 +444,32 @@ enum MarkdownStyle {
 
     static var paragraph: NSParagraphStyle {
         let style = NSMutableParagraphStyle()
+        if look == .xcode {
+            // 🔴 Xcode invents no spacing, and this is the one part of the look
+            // that is not in the theme file — it is in the editor.
+            //
+            // Xcode renders markdown *inside the source editor*, one source line
+            // per line, so `SourceEditorLayoutManager.calculateLineSpacing`
+            // is the whole rule: `ceil(font.leading)` plus the reader's own
+            // "additional line spacing", which is zero by default. There is no
+            // paragraph spacing anywhere — the gap between two blocks is the
+            // blank line that stands between them in the file.
+            //
+            // MarkRead shows the same source lines, blank ones included, so
+            // copying that means adding nothing: a `paragraphSpacing` on top
+            // would be spacing this program invented, laid over a gap the file
+            // already provides. It is what made lists look airy next to Xcode's.
+            style.lineSpacing = ceil(body.leading)
+            style.paragraphSpacing = 0
+            return style
+        }
         style.lineSpacing = 2.5
         style.paragraphSpacing = 6
         return style
     }
 
     static var baseAttributes: [NSAttributedString.Key: Any] {
-        [.font: body, .foregroundColor: NSColor.labelColor, .paragraphStyle: paragraph]
+        [.font: body, .foregroundColor: Palette.text, .paragraphStyle: paragraph]
     }
 
     // MARK: - Applying
@@ -323,7 +498,7 @@ enum MarkdownStyle {
             case .heading(let level):
                 storage.addAttributes([
                     .font: heading(level),
-                    .foregroundColor: Palette.heading,
+                    .foregroundColor: Palette.heading(level),
                 ], range: r)
 
             case .bold:
@@ -345,14 +520,27 @@ enum MarkdownStyle {
             case .code:
                 storage.addAttributes([
                     .font: mono,
-                    .foregroundColor: Palette.code ?? NSColor.labelColor,
-                    .backgroundColor: NSColor.quaternarySystemFill,
+                    .foregroundColor: Palette.code ?? Palette.text,
+                    .backgroundColor: Palette.codeBackground,
                     .markReadCode: true,
                 ], range: r)
 
+            case .codeBlock:
+                // No `.backgroundColor` here on purpose — see `Decoration.Style`.
+                storage.addAttributes([
+                    .font: mono,
+                    .foregroundColor: Palette.code ?? Palette.text,
+                    .markReadCode: true,
+                ], range: r)
+
+            case .infoString:
+                if let colour = Palette.infoString {
+                    storage.addAttribute(.foregroundColor, value: colour, range: r)
+                }
+
             case .link(let target):
                 var attributes: [NSAttributedString.Key: Any] = [
-                    .foregroundColor: NSColor.linkColor,
+                    .foregroundColor: Palette.link,
                     .underlineStyle: NSUnderlineStyle.single.rawValue,
                     .cursor: NSCursor.pointingHand,
                 ]
@@ -361,14 +549,14 @@ enum MarkdownStyle {
 
             case .wikiLink(let target):
                 var attributes: [NSAttributedString.Key: Any] = [
-                    .foregroundColor: NSColor.linkColor,
+                    .foregroundColor: Palette.link,
                     .cursor: NSCursor.pointingHand,
                 ]
                 if let url = wikiURL(for: target) { attributes[.link] = url }
                 storage.addAttributes(attributes, range: r)
 
             case .listMarker:
-                storage.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: r)
+                storage.addAttribute(.foregroundColor, value: Palette.listMarker, range: r)
 
             case .taskMarker(let done):
                 storage.addAttributes([
@@ -377,7 +565,7 @@ enum MarkdownStyle {
                 ], range: r)
 
             case .quote:
-                storage.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: r)
+                storage.addAttribute(.foregroundColor, value: Palette.quote, range: r)
 
             case .calloutLabel:
                 storage.addAttributes([
@@ -428,7 +616,7 @@ enum MarkdownStyle {
     /// sitting in a table row.
     static func paintIfPlain(_ colour: NSColor, _ storage: NSMutableAttributedString, _ range: NSRange) {
         storage.enumerateAttribute(.foregroundColor, in: range) { value, subrange, _ in
-            guard value as? NSColor == NSColor.labelColor else { return }
+            guard value as? NSColor == Palette.text else { return }
             storage.addAttribute(.foregroundColor, value: colour, range: subrange)
         }
     }

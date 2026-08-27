@@ -129,7 +129,7 @@ func agrees(_ expectation: Expectation, _ decorations: [Decoration], _ text: NSS
             return false
         }
     case .inlineCode:
-        return overlapping.contains { $0.style == .code }
+        return overlapping.contains { $0.style == .code || $0.style == .codeBlock }
     case .heading:
         return overlapping.contains {
             if case .heading(let level) = $0.style { return String(level) == expectation.detail }
@@ -140,7 +140,10 @@ func agrees(_ expectation: Expectation, _ decorations: [Decoration], _ text: NSS
     case .emphasis:
         return overlapping.contains { $0.style == .italic || $0.style == .boldItalic }
     case .codeBlock:
-        return overlapping.contains { $0.style == .code }
+        // `.codeBlock` since 0.2.7 — a fenced line stopped sharing a decoration
+        // with an inline span when the block gained a drawn box and the span
+        // kept its per-run background. Both still count as "this is code".
+        return overlapping.contains { $0.style == .codeBlock || $0.style == .code }
     }
 }
 
