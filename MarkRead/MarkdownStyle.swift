@@ -579,9 +579,24 @@ enum MarkdownStyle {
             }
         }
         /// A horizontal rule.
+        ///
+        /// 🔴 `cdTextMuted`, not `cdDivider`, and the difference is not taste.
+        /// A rule in this program is not a drawn hairline — it is the `---`
+        /// **glyphs**, styled text like any other. `cdDivider` (#333333) against
+        /// the theme's ground (#1A1A1A) measures **1.38:1**, which is fine for a
+        /// one-pixel line and unreadable for characters; `cdTextMuted` (#7A7A7A)
+        /// measures **4.05:1**.
+        ///
+        /// Lightening the window instead was measured and is the wrong lever:
+        /// raising the ground makes the line *worse* before it gets better —
+        /// #262626 gives 1.20:1 and #2E2E2E gives 1.07:1, the ground passing
+        /// through the line's own colour — and it only reaches 2.34:1 at
+        /// #6A6A6A, by which point body text has fallen from 14.73:1 to 4.58:1.
+        /// One construct cannot be fixed by moving the thing every other colour
+        /// in the palette was chosen against.
         static var rule: NSColor {
             switch look {
-            case .claudeDark: ClaudeTheme.divider
+            case .claudeDark: ClaudeTheme.textMuted
             case .markRead, .xcode, .plain: .tertiaryLabelColor
             }
         }
