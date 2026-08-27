@@ -61,8 +61,8 @@ struct StyleCheck {
               is: .labelColor)
 
         // The colours P2-10 asked for.
-        check("bold is coloured", "bold", in: "A **bold** word.", is: MarkdownStyle.Palette.emphasis!)
-        check("italic is coloured", "slanted", in: "A *slanted* word.", is: MarkdownStyle.Palette.emphasis!)
+        check("bold is coloured", "bold", in: "A **bold** word.", is: MarkdownStyle.Palette.bold!)
+        check("italic is coloured", "slanted", in: "A *slanted* word.", is: MarkdownStyle.Palette.italic!)
         check("a heading is coloured", "Heading", in: "# Heading", is: MarkdownStyle.Palette.heading(1))
         check("code is coloured", "swift", in: "Run `swift build` now.", is: MarkdownStyle.Palette.code!)
         check("a raw table row is coloured", "alpha", in: "| alpha | beta |\n|---|---|\n| c | d |",
@@ -202,6 +202,10 @@ struct StyleCheck {
               Set(levels.map { $0.usingColorSpace(.sRGB)!.brightnessComponent }).count == 4)
         check("Dark Claude color: level four and five share one",
               levels[3] == levels[4])
+        // The palette has separate keys for the two emphases; the styling sent
+        // both through one until 0.2.8, so italic wore bold's white.
+        check("Dark Claude color: italic is not bold's colour",
+              MarkdownStyle.Palette.italic != MarkdownStyle.Palette.bold)
 
         use(.markRead)
         check("switching back restores the accent", "Heading", in: "# Heading",

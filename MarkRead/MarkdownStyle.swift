@@ -130,6 +130,9 @@ enum MarkdownStyle {
         static let headingRest = hex(0xD6D6D6)
 
         static let bold = hex(0xFFFFFF)
+        /// `cdItalic` — a shade below bold's white, so the two emphases are told
+        /// apart instead of both shouting.
+        static let italic = hex(0xD8D8D8)
         static let inlineCodeText = hex(0xE8977B)
         static let inlineCodeBg = hex(0x2A2320)
         /// `cdCodeText` — a fenced block, which the palette deliberately sets in
@@ -505,14 +508,26 @@ enum MarkdownStyle {
             case .markRead, .plain: .linkColor
             }
         }
-        /// Bold and italic. Xcode puts no colour on either — only weight and
+        /// Bold. Xcode puts no colour on emphasis at all — only weight and
         /// slant — and neither does `plain`.
-        static var emphasis: NSColor? {
+        static var bold: NSColor? {
             switch look {
             case .markRead: .systemIndigo
-            // The palette gives bold its own white; italic is left alone, so
-            // that only one of the two carries a colour rather than both.
             case .claudeDark: ClaudeTheme.bold
+            case .xcode, .plain: nil
+            }
+        }
+        /// Italic.
+        ///
+        /// Split from `bold` because the Claude palette splits them —
+        /// `cdBold` is white, `cdItalic` a shade below — and the styling did
+        /// not: both went through one value, so italic came out in bold's white
+        /// and the palette's own distinction was lost. Caught by
+        /// `palette-check`, not by looking.
+        static var italic: NSColor? {
+            switch look {
+            case .markRead: .systemIndigo
+            case .claudeDark: ClaudeTheme.italic
             case .xcode, .plain: nil
             }
         }
@@ -539,6 +554,42 @@ enum MarkdownStyle {
             case .xcode: XcodeTheme.markupBackground
             case .claudeDark: ClaudeTheme.tableHeaderBg
             case .markRead, .plain: .quaternarySystemFill
+            }
+        }
+        /// A markup marker — the `#` of a heading, the `**` of bold — while the
+        /// caret reveals the line it sits on.
+        ///
+        /// 🔴 These five were the last constructs still reaching past the palette
+        /// for a system colour, which nobody noticed while every look followed
+        /// the Mac. `claudeDark` does not: with the Mac set to light,
+        /// `tertiaryLabelColor` is a *dark* grey and it was being drawn on this
+        /// theme's dark ground. Found by writing the fixture that shows every
+        /// construct at once — `Tests/Fixtures/palette.md`.
+        static var marker: NSColor {
+            switch look {
+            case .claudeDark: ClaudeTheme.textMuted
+            case .markRead, .xcode, .plain: .tertiaryLabelColor
+            }
+        }
+        /// YAML front matter.
+        static var frontMatter: NSColor {
+            switch look {
+            case .claudeDark: ClaudeTheme.textMuted
+            case .markRead, .xcode, .plain: .secondaryLabelColor
+            }
+        }
+        /// A horizontal rule.
+        static var rule: NSColor {
+            switch look {
+            case .claudeDark: ClaudeTheme.divider
+            case .markRead, .xcode, .plain: .tertiaryLabelColor
+            }
+        }
+        /// A task list's `[x]` or `[ ]`.
+        static func taskMarker(done: Bool) -> NSColor {
+            switch look {
+            case .claudeDark: done ? ClaudeTheme.accent : ClaudeTheme.listBullet
+            case .markRead, .xcode, .plain: done ? .controlAccentColor : .secondaryLabelColor
             }
         }
         /// What the editor is drawn on.
@@ -642,7 +693,7 @@ enum MarkdownStyle {
             case .marker, .hiddenMarker:
                 // Colour matters only while the caret reveals the line; the rest
                 // of the time these glyphs are not drawn at all.
-                storage.addAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor, range: r)
+                storage.addAttribute(.foregroundColor, value: Palette.marker, range: r)
 
             case .heading(let level):
                 storage.addAttributes([
@@ -651,11 +702,13 @@ enum MarkdownStyle {
                 ], range: r)
 
             case .bold:
-                addTrait(.bold, storage, r, colour: Palette.emphasis)
+                addTrait(.bold, storage, r, colour: Palette.bold)
             case .italic:
-                addTrait(.italic, storage, r, colour: Palette.emphasis)
+                addTrait(.italic, storage, r, colour: Palette.italic)
             case .boldItalic:
-                addTrait([.bold, .italic], storage, r, colour: Palette.emphasis)
+                // Bold's colour, not italic's: `***this***` is bold that also
+                // slants, and the heavier of the two should lead.
+                addTrait([.bold, .italic], storage, r, colour: Palette.bold)
 
             case .strikethrough:
                 storage.addAttributes([
@@ -709,7 +762,7 @@ enum MarkdownStyle {
 
             case .taskMarker(let done):
                 storage.addAttributes([
-                    .foregroundColor: done ? NSColor.controlAccentColor : NSColor.secondaryLabelColor,
+                    .foregroundColor: Palette.taskMarker(done: done),
                     .font: adding(.bold, to: mono),
                 ], range: r)
 
@@ -725,7 +778,7 @@ enum MarkdownStyle {
             case .frontMatter:
                 storage.addAttributes([
                     .font: mono,
-                    .foregroundColor: NSColor.secondaryLabelColor,
+                    .foregroundColor: Palette.frontMatter,
                 ], range: r)
 
             case .tableRow:
@@ -736,7 +789,7 @@ enum MarkdownStyle {
                 storage.addAttribute(.kern, value: CGFloat(units) * monoAdvance, range: r)
 
             case .rule:
-                storage.addAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor, range: r)
+                storage.addAttribute(.foregroundColor, value: Palette.rule, range: r)
             }
         }
     }
