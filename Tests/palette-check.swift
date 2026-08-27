@@ -95,6 +95,7 @@ struct PaletteCheck {
             ("A fenced block",   "#E0E0E0", "cdCodeText"),
             ("swift",            "#9CDCA4", "cdCodeString, the language name"),
             ("title:",           "#7A7A7A", "cdTextMuted, front matter"),
+            ("---",              "#7A7A7A", "cdTextMuted, the rule — see Palette.rule"),
         ]
         for (word, want, key) in expected {
             let got = hex(of: word, in: storage)
@@ -111,7 +112,7 @@ struct PaletteCheck {
         // ground.
         let ground = MarkdownStyle.Palette.editorBackground.usingColorSpace(.sRGB)!
         for (word, label) in [("title:", "front matter"), ("[x]", "a done task"),
-                              ("[ ]", "an open task")] {
+                              ("[ ]", "an open task"), ("---", "the horizontal rule")] {
             let range = (storage.string as NSString).range(of: word)
             guard range.location != NSNotFound,
                   let colour = (storage.attribute(.foregroundColor, at: range.location,
