@@ -1,7 +1,21 @@
-# MarkRead
+<p align="center">
+  <img src="docs/assets/markread-icon.png" width="160" alt="MarkRead app icon">
+</p>
+
+## MarkRead
 
 A small macOS Markdown reader and editor. It opens a `.md` file fast, shows it
 formatted with working links, and lets you edit it in place.
+
+[![Xcode 27+](https://img.shields.io/badge/Xcode-27%2B-147EFB?logo=xcode&logoColor=white)](https://developer.apple.com/xcode/)
+[![macOS 26+](https://img.shields.io/badge/macOS-26%2B-000000?logo=apple&logoColor=white)](https://www.apple.com/macos)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+<p align="center">
+  <img src="docs/assets/markread-hero.png" width="100%" alt="MarkRead on macOS: a Markdown document open and formatted with headings, code blocks and links, next to the empty-state window and the settings panel">
+</p>
+
+---
 
 ## The one design rule
 
