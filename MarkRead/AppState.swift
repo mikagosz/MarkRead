@@ -285,7 +285,7 @@ final class AppState {
 
         if let scheme = url.scheme?.lowercased() {
             switch scheme {
-            case "http", "https", "mailto", "obsidian":
+            case _ where Self.opensWithoutAsking(url):
                 NSWorkspace.shared.open(url)
             case "file":
                 openLocal(url)
@@ -358,6 +358,24 @@ final class AppState {
             // Shown, not run. Someone who really wants to run it still can, and
             // will see what they are running when they do.
             NSWorkspace.shared.activateFileViewerSelecting([url])
+        }
+    }
+
+    /// Schemes handed straight to their default handler. Everything else asks.
+    ///
+    /// Obsidian is let through for `open` only. Its other actions write: a link to
+    /// `obsidian://new?…&content=…&overwrite=true` replaces a note in the vault, and
+    /// because half of every `](…)` is not drawn the reader cannot see that before
+    /// clicking. Those go through the same "Open this link?" prompt, with the whole
+    /// target on screen.
+    static func opensWithoutAsking(_ url: URL) -> Bool {
+        switch url.scheme?.lowercased() {
+        case "http", "https", "mailto":
+            return true
+        case "obsidian":
+            return url.host?.lowercased() == "open"
+        default:
+            return false
         }
     }
 

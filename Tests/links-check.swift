@@ -3,7 +3,8 @@
 //   cd "Xcode programy/MarkRead"
 //   swiftc -parse-as-library -swift-version 6 -default-isolation MainActor \
 //          MarkRead/AppState.swift MarkRead/MarkdownDocument.swift \
-//          MarkRead/FolderIndex.swift MarkRead/MarkdownStyle.swift \
+//          MarkRead/FolderIndex.swift MarkRead/NoteLibrary.swift \
+//          MarkRead/MarkdownStyle.swift \
 //          MarkRead/MarkdownSyntax.swift MarkRead/MarkdownScanner.swift \
 //          MarkRead/MarkdownTables.swift MarkRead/MarkdownTableRenderer.swift \
 //          MarkRead/MarkdownTextView.swift MarkRead/EditorActions.swift \
@@ -73,6 +74,18 @@ struct LinksCheck {
         if FileManager.default.fileExists(atPath: calculator.path) {
             check("revealed, not run: a real installed app",
                   !AppState.isOpenableDocument(calculator))
+        }
+
+        // Schemes: web and mail go straight through, Obsidian only to open a note.
+        for link in ["https://example.com", "http://example.com", "mailto:a@example.com",
+                     "obsidian://open?vault=Notes&file=Index", "OBSIDIAN://Open?vault=Notes"] {
+            check("opens without asking: \(link)", AppState.opensWithoutAsking(URL(string: link)!))
+        }
+        // Obsidian actions that write, and anything unknown, ask first.
+        for link in ["obsidian://new?vault=Notes&file=test&content=X&overwrite=true",
+                     "obsidian://search?vault=Notes&query=x", "obsidian:///Users/me/Notes/a.md",
+                     "obsidian://vault/Notes/a", "vnc://host", "x-apple-helpbook://x", "file:///tmp/a"] {
+            check("asks first: \(link)", !AppState.opensWithoutAsking(URL(string: link)!))
         }
 
         print(failures == 0 ? "\nAll checks passed." : "\n\(failures) FAILED")

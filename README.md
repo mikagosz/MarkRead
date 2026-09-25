@@ -368,8 +368,8 @@ document that can come from anyone, so it is worth being exact about it:
 
 | What you click | What happens |
 |---|---|
-| `http`, `https`, `mailto`, `obsidian` | handed to your default handler |
-| any other scheme (`vnc:`, `x-apple-helpbook:`, …) | you are asked first, with the full target shown |
+| `http`, `https`, `mailto`, and `obsidian://open` | handed to your default handler |
+| any other scheme (`vnc:`, `x-apple-helpbook:`, …) and every other Obsidian action (`obsidian://new`, which can overwrite a note, `obsidian://search`, …) | you are asked first, with the full target shown |
 | a Markdown file | opened in MarkRead |
 | another document — image, PDF, text, audio, video, spreadsheet, presentation | opened with its default app |
 | anything else, including apps, scripts, executables, bundles and file types not listed above | **revealed in Finder, never launched** |
