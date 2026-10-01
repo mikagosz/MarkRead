@@ -97,6 +97,15 @@ at all: in a real note the URLs are longer than the rows they belong to.
   there is nothing to save.
 - macOS text substitutions (smart quotes, em dashes, auto-correct) are switched
   off. In a markdown file those are data loss.
+- **Updates from inside the app.** Once a month MarkRead asks
+  `downloads.fractal8.eu/MarkRead/api/error-update/version-check` for the newest
+  version number — its only network request, and it sends nothing else. A newer
+  version offers **Install and Restart**, **Skip This Version** or a manual
+  download; nothing installs until you click, and not while the open note has
+  unsaved changes. Built on [ErrorUpdate](https://github.com/mikagosz/ErrorUpdate)
+  1.0.1 with crash reporting off; the installer checks the package's SHA-256 and
+  the new app's code signature. Switch and **Check Now** in Settings,
+  **Check for Updates…** in the app menu.
 
 ## Installing
 
@@ -136,7 +145,9 @@ Neither holds anything else.
 | `FolderIndex.swift` | The sidebar's file list and wiki-link resolution |
 | `AppState.swift` | What one window is looking at; where links are followed |
 | `EditorActions.swift` | The Format menu commands |
-| `SettingsView.swift` | The Settings scene: look, reading face, text size, code face |
+| `SettingsView.swift` | The Settings scene: look, reading face, text size, code face, updates |
+| `Updates.swift` | In-app updates through ErrorUpdate: monthly check, the update window, install and restart |
+| `UpdateSupport.swift` | Which download address is allowed, and the restart helper that waits for the old copy to quit |
 
 ## Tests
 

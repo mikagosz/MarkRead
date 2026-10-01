@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// The whole of the app's preferences: the face notes are read in, and how big
@@ -21,6 +22,9 @@ struct SettingsView: View {
     /// Empty means the system monospaced face.
     @AppStorage(MarkdownStyle.Appearance.monoFamilyKey)
     private var codeFamily: String = ""
+    @AppStorage(Setting.checkUpdates)
+    private var checkUpdates = true
+    @ObservedObject private var updates = Updates.shared
 
     var body: some View {
         Form {
@@ -77,6 +81,22 @@ struct SettingsView: View {
             }
 
             Section {
+                Toggle("Check for updates once a month", isOn: $checkUpdates)
+                    .onChange(of: checkUpdates) { _, on in updates.enabled = on }
+                LabeledContent(lastCheckText) {
+                    Button("Check Now") {
+                        Task { await updates.check(manually: true) }
+                    }
+                }
+            } header: {
+                Text("Updates")
+            } footer: {
+                Text("The app asks fractal8.eu for the number of the newest version — it sends nothing else. A new version installs only when you click “Install”.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
                 Button("Restore Defaults") {
                     family = ""
                     codeFamily = ""
@@ -92,5 +112,10 @@ struct SettingsView: View {
         .onChange(of: size) { MarkdownStyle.Appearance.reload() }
         .onChange(of: family) { MarkdownStyle.Appearance.reload() }
         .onChange(of: codeFamily) { MarkdownStyle.Appearance.reload() }
+    }
+
+    private var lastCheckText: String {
+        guard let date = updates.lastCheck else { return String(localized: "Not checked yet") }
+        return String(localized: "Last: \(date.formatted(date: .abbreviated, time: .shortened))")
     }
 }

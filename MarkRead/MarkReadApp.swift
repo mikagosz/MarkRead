@@ -22,6 +22,12 @@ struct MarkReadApp: App {
 
     @CommandsBuilder
     private var menus: some Commands {
+        CommandGroup(after: .appInfo) {
+            Button("Check for Updates…") {
+                Task { await Updates.shared.check(manually: true) }
+            }
+        }
+
         CommandGroup(replacing: .newItem) {
             // New used to be replaced outright by Open, so ⌘N did nothing at
             // all. The panel picks the name and the place, the file is created
@@ -100,6 +106,12 @@ struct MarkReadApp: App {
 /// AppKit still owns two things SwiftUI has no hook for: files handed over by
 /// Finder, and the "last window closed" lifecycle.
 final class AppDelegate: NSObject, NSApplicationDelegate {
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // The restart after an update would stop at the save question for a dirty note.
+        Updates.shared.isBusy = { AppState.shared.document?.isDirty == true }
+        Updates.shared.start()
+    }
 
     func application(_ application: NSApplication, open urls: [URL]) {
         // A double-click in Finder, a drop on the Dock icon, or `open -a`.
