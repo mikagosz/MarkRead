@@ -3,10 +3,15 @@ import SwiftUI
 
 struct ContentView: View {
     @Bindable var app: AppState
+    /// Drawn off screen for a Help picture: the sidebar's text gets a plain colour. Its usual vibrant colour is
+    /// mixed with the backdrop by the window server, which a bitmap never sees, and came out nearly black.
+    var picture = false
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         NavigationSplitView(columnVisibility: $app.splitVisibility) {
             Sidebar(app: app)
+                .foregroundStyle(picture ? AnyShapeStyle(scheme == .dark ? Color.white : Color.black) : AnyShapeStyle(.primary))
                 .navigationSplitViewColumnWidth(min: 180, ideal: 240, max: 420)
         } detail: {
             Detail(app: app)
@@ -22,6 +27,14 @@ struct ContentView: View {
                     Image(systemName: "square.and.pencil")
                 }
                 .help("New Note (⌘N)")
+            }
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    HelpWindow.shared.show()
+                } label: {
+                    Image(systemName: "questionmark.circle")
+                }
+                .help(HelpContent.menuItem.current + " (⌘?)")
             }
         }
         .alert(item: $app.alert) { alert in

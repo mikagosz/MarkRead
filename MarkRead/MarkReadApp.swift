@@ -6,6 +6,11 @@ struct MarkReadApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @State private var app = AppState.shared
 
+    init() {
+        // `--export-help` / `--export-help-window`: PNGs of Help, then quit — before any window opens.
+        HelpExport.runIfRequested()
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView(app: app)
@@ -96,6 +101,11 @@ struct MarkReadApp: App {
                 .keyboardShortcut("k")
         }
 
+        CommandGroup(replacing: .help) {
+            Button(HelpContent.menuItem.current) { HelpWindow.shared.show() }
+                .keyboardShortcut("?")
+        }
+
         CommandGroup(after: .sidebar) {
             Button("Toggle Note List") { app.toggleSidebar() }
                 .keyboardShortcut("s", modifiers: [.command, .control])
@@ -111,6 +121,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The restart after an update would stop at the save question for a dirty note.
         Updates.shared.isBusy = { AppState.shared.document?.isDirty == true }
         Updates.shared.start()
+        // `--show-help`: the Help window right away — for a look after changes, without the menu.
+        if CommandLine.arguments.contains("--show-help") { HelpWindow.shared.show() }
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
