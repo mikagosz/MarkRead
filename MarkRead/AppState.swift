@@ -61,7 +61,7 @@ final class AppState {
     }
 
     struct Alert: Identifiable {
-        enum Kind { case message, saveConflict, confirmOpen(URL), encodingChange }
+        enum Kind { case message, saveConflict, confirmOpen(URL), encodingChange, missingOnDisk, readOnly }
         let id = UUID()
         let title: String
         let detail: String
@@ -194,8 +194,35 @@ final class AppState {
         // A save with nothing to save still rewrote the file from scratch, and
         // every rewrite is another chance to lose the file's Finder tag.
         guard document.isDirty else { return }
+        consent = SaveConsent()
+        attemptSave()
+    }
+
+    /// What the user has already agreed to during this one save.
+    private struct SaveConsent {
+        var overwrite = false
+        var readOnly = false
+        var toUTF8 = false
+    }
+    private var consent = SaveConsent()
+
+    /// One place that turns a failed save into the question it needs. Each
+    /// answer comes back here with what was agreed so far, so a read-only file
+    /// that has also changed on disk gets both questions, one after the other,
+    /// and never the same one twice.
+    private func attemptSave() {
+        guard let document else { return }
         do {
-            try document.save()
+            try document.save(force: consent.overwrite, convertingToUTF8: consent.toUTF8,
+                              allowReadOnly: consent.readOnly)
+        } catch MarkdownDocument.SaveError.missingOnDisk(let url) {
+            alert = Alert(title: "Moved or deleted",
+                          detail: "\(document.displayName) is no longer at \(url.deletingLastPathComponent().path) — it was moved, renamed or deleted while open. Save it there again as a new file?",
+                          kind: .missingOnDisk)
+        } catch MarkdownDocument.SaveError.readOnly {
+            alert = Alert(title: "Read-only file",
+                          detail: "\(document.displayName) is locked or read-only. Save your changes into it anyway?",
+                          kind: .readOnly)
         } catch MarkdownDocument.SaveError.notRepresentable(_, let encoding) {
             alert = Alert(
                 title: "Different encoding",
@@ -210,20 +237,23 @@ final class AppState {
         }
     }
 
+    /// After "Overwrite" or "Save Here": the user has seen what is on disk.
     func saveOverwriting() {
-        guard let document else { return }
-        do { try document.save(force: true) } catch {
-            alert = Alert(title: "Could not save", detail: error.localizedDescription)
-        }
+        consent.overwrite = true
+        attemptSave()
+    }
+
+    /// After "Save Anyway" on a read-only file.
+    func saveIntoReadOnly() {
+        consent.readOnly = true
+        attemptSave()
     }
 
     /// Only ever reached through the question above: converting rewrites every
     /// byte of the file, not just the new ones.
     func saveAsUTF8() {
-        guard let document else { return }
-        do { try document.save(convertingToUTF8: true) } catch {
-            alert = Alert(title: "Could not save", detail: error.localizedDescription)
-        }
+        consent.toUTF8 = true
+        attemptSave()
     }
 
     func closeFolder() {

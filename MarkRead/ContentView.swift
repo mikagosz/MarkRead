@@ -59,6 +59,20 @@ struct ContentView: View {
                     primaryButton: .default(Text("Open")) { NSWorkspace.shared.open(url) },
                     secondaryButton: .cancel()
                 )
+            case .missingOnDisk:
+                return Alert(
+                    title: Text(alert.title),
+                    message: Text(alert.detail),
+                    primaryButton: .default(Text("Save Here")) { app.saveOverwriting() },
+                    secondaryButton: .cancel()
+                )
+            case .readOnly:
+                return Alert(
+                    title: Text(alert.title),
+                    message: Text(alert.detail),
+                    primaryButton: .destructive(Text("Save Anyway")) { app.saveIntoReadOnly() },
+                    secondaryButton: .cancel()
+                )
             case .encodingChange:
                 return Alert(
                     title: Text(alert.title),

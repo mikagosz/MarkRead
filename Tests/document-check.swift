@@ -37,6 +37,143 @@ struct DocumentCheck {
         }
     }
 
+    /// What the dynamic audit of 2026-11-12 found in saving, one case each,
+    /// every one with a control that shows the check can fail.
+    static func dynamicAuditFixes() {
+        let fm = FileManager.default
+        func bytes(_ url: URL) -> Data { (try? Data(contentsOf: url)) ?? Data() }
+        func inode(_ url: URL) -> Int { ((try? fm.attributesOfItem(atPath: url.path))?[.systemFileNumber] as? Int) ?? -1 }
+        func isLink(_ url: URL) -> Bool { (try? fm.destinationOfSymbolicLink(atPath: url.path)) != nil }
+        func refuses(_ document: MarkdownDocument, _ wanted: (MarkdownDocument.SaveError) -> Bool) -> Bool {
+            do { try document.save(); return false } catch let error as MarkdownDocument.SaveError {
+                return wanted(error)
+            } catch { return false }
+        }
+
+        // D-S-P1-02: a symbolic link stays a link, the real note gets the edit.
+        let real = scratch.appendingPathComponent("vault/real.md")
+        let link = scratch.appendingPathComponent("elsewhere/link.md")
+        try? fm.createDirectory(at: real.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? fm.createDirectory(at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? Data("original\n".utf8).write(to: real)
+        try? fm.createSymbolicLink(at: link, withDestinationURL: real)
+        check("positive control: link.md is a symbolic link", isLink(link))
+        if let document = try? MarkdownDocument(url: link) {
+            document.text = "original\nedit\n"
+            try? document.save()
+            check("D-S-P1-02 a symbolic link is still a link after saving", isLink(link))
+            check("D-S-P1-02 the note the link points at has the edit", bytes(real) == Data("original\nedit\n".utf8))
+        }
+
+        // D-S-P1-03: a change with an older, equal or slightly newer date is a change.
+        for (name, offset) in [("older", -600.0), ("equal", 0.0), ("+0.3 s", 0.3), ("+2 s (control)", 2.0)] {
+            let url = scratch.appendingPathComponent("mtime-\(abs(name.hashValue)).md")
+            try? Data("MINE\n".utf8).write(to: url)
+            let known = (try? fm.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date ?? Date()
+            guard let document = try? MarkdownDocument(url: url) else { continue }
+            document.text = "MINE\nedit\n"
+            try? Data("FROM THE OTHER MAC\n".utf8).write(to: url)
+            try? fm.setAttributes([.modificationDate: known.addingTimeInterval(offset)], ofItemAtPath: url.path)
+            check("D-S-P1-03 changed on disk, date \(name) → refused",
+                  refuses(document) { if case .changedOnDisk = $0 { true } else { false } })
+            check("D-S-P1-03 the other version is still there (\(name))", bytes(url) == Data("FROM THE OTHER MAC\n".utf8))
+        }
+        // Control the other way: only the date moved, the bytes did not.
+        let touched = scratch.appendingPathComponent("touched.md")
+        try? Data("same\n".utf8).write(to: touched)
+        if let document = try? MarkdownDocument(url: touched) {
+            document.text = "same\nedit\n"
+            try? fm.setAttributes([.modificationDate: Date().addingTimeInterval(60)], ofItemAtPath: touched.path)
+            check("D-S-P1-03 control: a new date on the same bytes saves normally", (try? document.save()) != nil)
+        }
+
+        // D-S-P2-01: a read-only file asks first, and keeps its tags when it is written.
+        let locked = scratch.appendingPathComponent("locked.md")
+        try? Data("locked\n".utf8).write(to: locked)
+        try? (locked as NSURL).setResourceValue(["Czerwony"], forKey: .tagNamesKey)
+        chmod(locked.path, 0o444)
+        if let document = try? MarkdownDocument(url: locked) {
+            document.text = "locked\nedit\n"
+            check("D-S-P2-01 a read-only file is not written without asking",
+                  refuses(document) { if case .readOnly = $0 { true } else { false } })
+            check("D-S-P2-01 …and is untouched", bytes(locked) == Data("locked\n".utf8))
+            try? document.save(allowReadOnly: true)
+            check("D-S-P2-01 after asking the edit is written", bytes(locked) == Data("locked\nedit\n".utf8))
+            let tags = (try? URL(fileURLWithPath: locked.path).resourceValues(forKeys: [.tagNamesKey]))?.tagNames ?? []
+            check("D-S-P2-01 the Finder tag survives on a read-only file", tags == ["Czerwony"], "\(tags)")
+            let mode = (try? fm.attributesOfItem(atPath: locked.path))?[.posixPermissions] as? Int ?? -1
+            check("D-S-P2-01 it is still read-only", mode == 0o444, String(mode, radix: 8))
+        }
+        chmod(locked.path, 0o644)
+
+        // D-S-P2-03: moved or deleted while open → asked, not recreated.
+        for kind in ["deleted", "moved"] {
+            let url = scratch.appendingPathComponent("gone-\(kind).md")
+            let away = scratch.appendingPathComponent("gone-\(kind)-moved.md")
+            try? Data("x\n".utf8).write(to: url)
+            guard let document = try? MarkdownDocument(url: url) else { continue }
+            document.text = "x\nedit\n"
+            if kind == "deleted" { try? fm.removeItem(at: url) } else { try? fm.moveItem(at: url, to: away) }
+            check("D-S-P2-03 \(kind): save asks",
+                  refuses(document) { if case .missingOnDisk = $0 { true } else { false } })
+            check("D-S-P2-03 \(kind): nothing recreated at the old path", !fm.fileExists(atPath: url.path))
+            try? document.save(force: true)
+            check("D-S-P2-03 \(kind): \"Save Here\" writes it back", bytes(url) == Data("x\nedit\n".utf8))
+        }
+
+        // D-S-P3-01, D-S-P3-02: every encoding comes back byte for byte.
+        let text = "# Zażółć gęślą jaźń\nlinia ü é\n"
+        let encodings: [(String, Data)] = [
+            ("UTF-16 BE + BOM", Data([0xFE, 0xFF]) + text.data(using: .utf16BigEndian)!),
+            ("UTF-16 LE + BOM", Data([0xFF, 0xFE]) + text.data(using: .utf16LittleEndian)!),
+            ("UTF-16 BE", text.data(using: .utf16BigEndian)!),
+            ("UTF-16 LE", text.data(using: .utf16LittleEndian)!),
+            ("UTF-32 LE + BOM", Data([0xFF, 0xFE, 0, 0]) + text.data(using: .utf32LittleEndian)!),
+            ("Windows-1250", text.data(using: .windowsCP1250)!),
+            ("Latin-1", "# Grüße\nlinia ü é\n".data(using: .isoLatin1)!),
+            ("Mac Roman", "# Café\nlinia ü é ©\n".data(using: .macOSRoman)!),
+        ]
+        for (name, original) in encodings {
+            let after = roundTrip(original, name: "enc-\(abs(name.hashValue)).md")
+            check("D-S-P3-01/02 \(name) opens and saves byte for byte", after == original,
+                  "\(original.count) B in, \(after?.count.description ?? "nil (refused)") B out")
+        }
+        let be = scratch.appendingPathComponent("be-edit.md")
+        try? (Data([0xFE, 0xFF]) + "ab\n".data(using: .utf16BigEndian)!).write(to: be)
+        if let document = try? MarkdownDocument(url: be) {
+            document.text = "abc\n"
+            try? document.save()
+            check("D-S-P3-01 an edited UTF-16 BE file stays big-endian with its BOM",
+                  bytes(be) == Data([0xFE, 0xFF]) + "abc\n".data(using: .utf16BigEndian)!)
+        }
+        // Control: binary with .md on it is still refused.
+        let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13]) + Data((0 ..< 256).map { UInt8($0) })
+        let pngURL = scratch.appendingPathComponent("picture.md")
+        try? png.write(to: pngURL)
+        check("control: a PNG named .md is still refused", (try? MarkdownDocument(url: pngURL)) == nil)
+        let cut = scratch.appendingPathComponent("cut-utf8.md")
+        try? Data("# Zażółć gęślą".utf8).dropLast().write(to: cut)
+        check("control: UTF-8 with its last character cut off is still refused", (try? MarkdownDocument(url: cut)) == nil)
+
+        // D-S-P3-03: a hard link keeps both names on one file.
+        let one = scratch.appendingPathComponent("hard-one.md")
+        let two = scratch.appendingPathComponent("hard-two.md")
+        try? Data("shared\n".utf8).write(to: one)
+        try? fm.linkItem(at: one, to: two)
+        check("positive control: the two names share an inode", inode(one) == inode(two))
+        if let document = try? MarkdownDocument(url: one) {
+            document.text = "shared\nedit\n"
+            try? document.save()
+            check("D-S-P3-03 both names still share one file", inode(one) == inode(two))
+            check("D-S-P3-03 the other name sees the edit", bytes(two) == Data("shared\nedit\n".utf8))
+        }
+
+        // No temporary file left beside the notes by any of the saves above.
+        let leftovers = (fm.enumerator(atPath: scratch.path)?.allObjects as? [String] ?? [])
+            .filter { $0.contains(".markread-") }
+        check("no temporary files left behind", leftovers.isEmpty, "\(leftovers)")
+    }
+
     static func main() {
         try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: scratch) }
@@ -168,6 +305,8 @@ struct DocumentCheck {
             check("a non-UTF-8 note opens at all", false, "MarkdownDocument threw")
         }
 
+        dynamicAuditFixes()
+
         // Optional: every .md under a folder given on the command line.
         for path in CommandLine.arguments.dropFirst() {
             var checked = 0, differ = 0
@@ -187,6 +326,9 @@ struct DocumentCheck {
         }
 
         print(failures == 0 ? "\nAll checks passed." : "\n\(failures) FAILED")
+        // `exit` skips the `defer` above, which left this folder behind in the
+        // system's temporary directory on every run.
+        try? FileManager.default.removeItem(at: scratch)
         exit(failures == 0 ? 0 : 1)
     }
 }

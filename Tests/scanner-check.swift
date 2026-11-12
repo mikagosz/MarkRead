@@ -162,6 +162,22 @@ struct ScannerCheck {
         check("a paragraph is not a table row",
               MarkdownTables.isRow("zwykly akapit" as NSString, NSRange(location: 0, length: 13)) == false)
 
+        // D-S-P2-02 (dynamic audit 2026-11-12): a long line of unclosed markers
+        // was quadratic — 10 KB of `~~x ` took a second, 20 KB froze the editor.
+        for (name, unit) in [("~~x ", "~~x "), ("==x ", "==x "), ("__ x", "__ x ")] {
+            let line = String(repeating: unit, count: 100_000 / unit.count)
+            let started = Date()
+            _ = decorations(line)
+            let millis = Int(Date().timeIntervalSince(started) * 1000)
+            check("D-S-P2-02 100 KB of \(name) scans in under a second (\(millis) ms)", millis < 1000)
+        }
+        // …and the markers still do what they did, including a single `~` or `=` inside.
+        check("D-S-P2-02 control: ~~a~b~~ is struck through", covered("~~a~b~~", .strikethrough) == "a~b")
+        check("D-S-P2-02 control: ==a=b== is marked", covered("==a=b==", .highlight) == "a=b")
+        check("D-S-P2-02 control: __a_b__ is bold", covered("__a_b__", .bold) == "a_b")
+        check("D-S-P2-02 control: two struck spans on one line stay two",
+              styles("~~a~~ and ~~b~~").filter { $0 == .strikethrough }.count == 2)
+
         print(failures == 0 ? "\nAll checks passed." : "\n\(failures) FAILED")
         exit(failures == 0 ? 0 : 1)
     }

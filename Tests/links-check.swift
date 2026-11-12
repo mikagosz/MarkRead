@@ -89,6 +89,9 @@ struct LinksCheck {
         }
 
         print(failures == 0 ? "\nAll checks passed." : "\n\(failures) FAILED")
+        // `exit` skips the `defer` above, which left this folder behind in the
+        // system's temporary directory on every run.
+        try? FileManager.default.removeItem(at: scratch)
         exit(failures == 0 ? 0 : 1)
     }
 }

@@ -113,7 +113,13 @@ final class Updates: ObservableObject, ErrorUpdateDelegate {
 
     private func checkIfDue() async {
         guard enabled else { return }
-        if let lastCheck, Date().timeIntervalSince(lastCheck) < Self.interval { return }
+        // A date in the future (one check with the clock set ahead) used to switch checking
+        // off until that date came — the age came out negative and always "too recent"
+        // (dynamic audit 2026-11-12, D-S-P3-05; the same fix as CWMac 1.0.7 and NoteM 1.1.10).
+        if let lastCheck {
+            let age = Date().timeIntervalSince(lastCheck)
+            if age >= 0, age < Self.interval { return }
+        }
         await check(manually: false)
     }
 

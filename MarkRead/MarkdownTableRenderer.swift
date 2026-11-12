@@ -32,16 +32,44 @@ final class TableLayout {
     }
 
     /// Source lines this table occupies, delimiter row included.
-    let lines: ClosedRange<Int>
+    private(set) var lines: ClosedRange<Int>
     /// The line holding `| --- | --- |`, drawn as the header rule.
-    let delimiterLine: Int?
+    private(set) var delimiterLine: Int?
     private(set) var rows: [Row] = []
+    /// Row index by the line's distance from the top of the table — the same
+    /// after `shift`. `rows.first { $0.line == line }` was a walk over every row
+    /// for every line, and laying out a table asks once per line: 10 000 rows,
+    /// 100 million comparisons (D-S-P1-01).
+    private var rowAtOffset: [Int: Int] = [:]
+
+    private func indexRows() {
+        rowAtOffset.removeAll(keepingCapacity: true)
+        for (index, row) in rows.enumerated() { rowAtOffset[row.line - lines.lowerBound] = index }
+    }
+
+    private func row(onLine line: Int) -> Row? {
+        rowAtOffset[line - lines.lowerBound].map { rows[$0] }
+    }
     private(set) var columnWidths: [CGFloat] = []
     let width: CGFloat
 
     static let cellPaddingX: CGFloat = 10
     static let cellPaddingY: CGFloat = 6
     static let minimumColumnWidth: CGFloat = 54
+
+    /// Moves the table down (or up) by `delta` lines after an edit above it.
+    ///
+    /// Nothing else about it depends on where it sits: the cells are copies,
+    /// and the drawing asks the editor where each line ended up. Rebuilding it
+    /// instead cost seconds per keystroke on a 10 000-row table (dynamic audit
+    /// 2026-11-12, D-S-P1-01).
+    func shift(by delta: Int) {
+        guard delta != 0 else { return }
+        lines = (lines.lowerBound + delta) ... (lines.upperBound + delta)
+        delimiterLine = delimiterLine.map { $0 + delta }
+        // Offsets from the top do not move, so `rowAtOffset` stays right.
+        for index in rows.indices { rows[index].line += delta }
+    }
 
     // MARK: - Building
 
@@ -91,6 +119,7 @@ final class TableLayout {
             built.append(Row(cells: cells, isHeader: isHeader, line: row.line))
         }
         self.rows = built
+        indexRows()
         measure()
     }
 
@@ -269,7 +298,7 @@ final class TableLayout {
     /// delimiter (which becomes the header rule and needs almost nothing).
     func height(forLine line: Int) -> CGFloat? {
         if line == delimiterLine { return 1 }
-        return rows.first { $0.line == line }?.height
+        return self.row(onLine: line)?.height
     }
 
     // MARK: - Drawing
@@ -287,7 +316,7 @@ final class TableLayout {
     /// renderer put down column separators and row rules only, so the table had
     /// no left, right, top or bottom side and read as an open grid.
     func draw(line: Int, in rect: CGRect) {
-        guard let row = rows.first(where: { $0.line == line }) else {
+        guard let row = self.row(onLine: line) else {
             // The delimiter line: the rule under the header, plus the one pixel
             // of side edge that belongs to this line. Skipping it left two
             // notches in the frame.
@@ -411,7 +440,7 @@ final class TableLayout {
 
     /// The link under `point`, where `point` is relative to the row's rect.
     func link(inLine line: Int, at point: CGPoint) -> URL? {
-        guard let row = rows.first(where: { $0.line == line }) else { return nil }
+        guard let row = self.row(onLine: line) else { return nil }
         for cell in row.cells where cell.frame.contains(point) {
             let local = CGPoint(x: point.x - cell.frame.minX - Self.cellPaddingX,
                                 y: point.y - cell.frame.minY - Self.cellPaddingY)

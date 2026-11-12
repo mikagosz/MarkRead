@@ -15,6 +15,9 @@ final class EditorHandle {
     /// measurement and unplugged before a push, so in a shipping build this
     /// closure was written on every launch and read by nothing.
     @ObservationIgnored var diagnostics: (() -> [String: Any])?
+    /// Spoils the editor's own bookkeeping on purpose, so the consistency check
+    /// in `Tests/incremental-check.swift` can show it notices. DEBUG only.
+    @ObservationIgnored var spoilForCheck: (() -> Void)?
     #endif
 }
 
@@ -393,6 +396,10 @@ struct MarkdownEditor: NSViewRepresentable {
             super.init()
             #if DEBUG
             handle.diagnostics = { [weak self] in self?.report() ?? [:] }
+            handle.spoilForCheck = { [weak self] in
+                guard let self, self.map.lines.count > 1 else { return }
+                self.map = BlockMap(lines: Array(self.map.lines.dropLast()), openFrontMatter: false)
+            }
             #endif
         }
 
@@ -430,7 +437,43 @@ struct MarkdownEditor: NSViewRepresentable {
                     return layoutManager.usedRect(for: container).height
                 }(),
                 "visibleHeight": scrollView?.contentView.bounds.height ?? -1,
+                "problems": consistencyProblems(),
             ]
+        }
+
+        /// Everything the editor keeps about the text, checked against the text.
+        ///
+        /// After an edit only the touched lines are worked out again and the
+        /// rest is moved (`applyEdit`). This says whether what was moved still
+        /// matches what a fresh start would compute.
+        private func consistencyProblems() -> [String] {
+            guard let storage = textView?.textStorage else { return ["no storage"] }
+            var problems: [String] = []
+            let text = storage.string as NSString
+            let fresh = BlockMap.build(text)
+            if fresh.lines.count != map.lines.count {
+                problems.append("map has \(map.lines.count) lines, a fresh one \(fresh.lines.count)")
+            } else if let bad = fresh.lines.indices.first(where: {
+                fresh.lines[$0].range != map.lines[$0].range || fresh.lines[$0].kind != map.lines[$0].kind
+            }) {
+                problems.append("map differs from a fresh one at line \(bad)")
+            }
+            for (line, ranges) in hiddenByLine.sorted(by: { $0.key < $1.key }) {
+                guard line < map.lines.count else { problems.append("hidden ranges kept for line \(line), past the end"); continue }
+                let whole = map.lines[line].range
+                if ranges.contains(where: { $0.location < whole.location || NSMaxRange($0) > NSMaxRange(whole) }) {
+                    problems.append("hidden range outside line \(line)")
+                }
+                guard !isTableRow(line) else { continue }
+                let expected = MarkdownScanner.decorations(text: text, map: fresh, lines: line ..< line + 1)
+                    .compactMap { $0.style == .hiddenMarker ? $0.range : nil }
+                if ranges != expected { problems.append("hidden ranges of line \(line) differ from the scanner") }
+            }
+            for (line, table) in tablesByLine.sorted(by: { $0.key < $1.key }) {
+                if !table.lines.contains(line) { problems.append("line \(line) points at a table on \(table.lines)") }
+                if !isTableRow(line) { problems.append("line \(line) is drawn as a table row but is not one") }
+            }
+            return Array(problems.prefix(8))
         }
         #endif
 
@@ -488,11 +531,36 @@ struct MarkdownEditor: NSViewRepresentable {
             highlightVisible()
         }
 
+        /// The one change NSTextView announced before `textDidChange`, in the
+        /// coordinates of the text before it.
+        private var pendingEdit: (range: NSRange, inserted: Int)?
+        private var announcedEdits = 0
+
+        func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange,
+                      replacementString: String?) -> Bool {
+            // `nil` is an attribute-only change; the text stays as it is.
+            if let replacementString {
+                announcedEdits += 1
+                pendingEdit = (affectedCharRange, (replacementString as NSString).length)
+            }
+            return true
+        }
+
         func textDidChange(_ notification: Notification) {
             guard let textView else { return }
             onTextChange(textView.string)
-            rebuildMap()
-            highlightVisible()
+            // Exactly one announced change → patch what it touched. Anything else
+            // (several ranges at once, a change nobody announced) → start over,
+            // which is always right and only slow.
+            let edit = announcedEdits == 1 ? pendingEdit : nil
+            pendingEdit = nil
+            announcedEdits = 0
+            if let edit, applyEdit(edit) {
+                highlightVisible()
+            } else {
+                rebuildMap()
+                highlightVisible()
+            }
             // Otherwise the caret keeps whatever the character to its left had —
             // keep typing after a link and the new text joins the link.
             textView.typingAttributes = MarkdownStyle.baseAttributes
@@ -502,12 +570,153 @@ struct MarkdownEditor: NSViewRepresentable {
             updateRevealedLine()
         }
 
+        /// True while the storage holds text the map does not describe yet.
+        ///
+        /// AppKit sends the selection change from *inside* the storage edit —
+        /// before `textDidChange` — so `updateRevealedLine` used to restyle the
+        /// new text with the old map. Backspace in any row of a table being
+        /// edited read past the end of the string and took the process down,
+        /// unsaved text with it (dynamic audit 2026-11-12, found while fixing
+        /// D-S-P1-01: D-S-P1-04). `textDidChange` catches up and reveals the
+        /// caret's line itself.
+        ///
+        /// The length, not "an edit was announced": an announced edit that
+        /// never happens would leave the editor unstyled for good. A change that
+        /// keeps the length cannot reach past the end, and `textDidChange`
+        /// restyles what it touched a moment later.
+        ///
+        /// Against the map, not `nsText`: that is the storage's own live string,
+        /// so it is always exactly as long as the storage.
+        private var textIsAhead: Bool {
+            (textView?.textStorage?.length ?? 0) != (map.lines.last.map { NSMaxRange($0.range) } ?? 0)
+        }
+
         private func rebuildMap() {
             guard let textView, let storage = textView.textStorage else { return }
             forgetTextState()
             nsText = storage.string as NSString
             map = BlockMap.build(nsText)
             updateRevealedLine()
+        }
+
+        /// Brings everything that describes the text up to date after one edit,
+        /// touching only the lines it changed.
+        ///
+        /// Until 0.3.4 every keystroke threw it all away: the block map, the
+        /// styled lines, every laid-out table. A table is restyled whole — its
+        /// column widths come from all of its rows — so a character typed in the
+        /// heading *above* a 10 000-row table cost 4.4 s, and 30 000 rows froze
+        /// the program (dynamic audit 2026-11-12, D-S-P1-01). Lines above the
+        /// edit are untouched; lines below only moved, and their attributes
+        /// moved with the text in the storage — so the caches move with them.
+        ///
+        /// Returns false when the edit cannot be patched; the caller rebuilds.
+        private func applyEdit(_ edit: (range: NSRange, inserted: Int)) -> Bool {
+            guard let textView, let storage = textView.textStorage, !map.lines.isEmpty else { return false }
+            let newText = storage.string as NSString
+            guard let patch = BlockMap.patched(map, text: newText, location: edit.range.location,
+                                               removed: edit.range.length, inserted: edit.inserted)
+            else { return false }
+            let old = map
+            let first = patch.first, oldLast = patch.oldLast, newLast = patch.newLast
+            let lineDelta = newLast - oldLast
+            let charDelta = edit.inserted - edit.range.length
+
+            /// Where an old line is now; nil for the lines the edit replaced.
+            func moved(_ line: Int) -> Int? {
+                line < first ? line : (line > oldLast ? line + lineDelta : nil)
+            }
+            func movedRange(_ range: NSRange, _ line: Int) -> NSRange {
+                line > oldLast ? NSRange(location: range.location + charDelta, length: range.length) : range
+            }
+
+            map = patch.map
+            nsText = newText
+            lineRectsKey = nil
+            knownTables.removeAll()
+
+            var hidden: [Int: [NSRange]] = [:]
+            hidden.reserveCapacity(hiddenByLine.count)
+            for (line, ranges) in hiddenByLine {
+                guard let now = moved(line) else { continue }
+                hidden[now] = line > oldLast ? ranges.map { movedRange($0, line) } : ranges
+            }
+            hiddenByLine = hidden
+
+            // The edited lines, in the new numbering, and any table they reach.
+            var restyleFrom = first, restyleTo = newLast
+            let editedHasRow = (first ... max(first, newLast)).contains { isTableRow($0) }
+            let caret = min(textView.selectedRange().location, newText.length)
+            let caretLine = map.lineIndex(containing: caret)
+
+            var seen = Set<ObjectIdentifier>()
+            var keptCache: [Int: TableLayout] = [:]
+            var keptByLine: [Int: TableLayout] = [:]
+            var keptTables = Set<ObjectIdentifier>()
+            for table in Array(tableCache.values) + Array(tablesByLine.values) {
+                guard seen.insert(ObjectIdentifier(table)).inserted else { continue }
+                let lower = table.lines.lowerBound, upper = table.lines.upperBound
+                let overlaps = lower <= oldLast && upper >= first
+                let adjacent = upper == first - 1 || lower == oldLast + 1
+                if overlaps || (adjacent && editedHasRow) {
+                    // Its rows changed, or it may have grown into the edit.
+                    let from = lower < first ? lower : first
+                    let to = upper > oldLast ? upper + lineDelta : newLast
+                    restyleFrom = min(restyleFrom, from)
+                    restyleTo = max(restyleTo, to)
+                    continue
+                }
+                if lower > oldLast { table.shift(by: lineDelta) }
+                keptTables.insert(ObjectIdentifier(table))
+            }
+            for (key, table) in tableCache where keptTables.contains(ObjectIdentifier(table)) {
+                if let now = moved(key) { keptCache[now] = table }
+            }
+            for (line, table) in tablesByLine where keptTables.contains(ObjectIdentifier(table)) {
+                if let now = moved(line) { keptByLine[now] = table }
+            }
+            tableCache = keptCache
+            tablesByLine = keptByLine
+
+            (restyleFrom, restyleTo) = wholeTables((restyleFrom, restyleTo))
+            // A very long table that holds the caret shows as markdown, not as a
+            // grid, so nothing is laid out for it — only its pipes are padded to
+            // line up. Restyling all of it on every keystroke is what made typing
+            // inside one crawl; the rows around the caret are what is on screen.
+            // The rest is restyled whole once the caret leaves the table.
+            let window = 200
+            if restyleTo - restyleFrom > 2 * window, isTableRow(caretLine) {
+                restyleFrom = max(restyleFrom, first - window)
+                restyleTo = min(restyleTo, newLast + window)
+            }
+
+            if let styled = styledRange {
+                let lower = moved(styled.lowerBound) ?? first
+                let upper = moved(styled.upperBound) ?? newLast
+                styledRange = lower <= upper ? lower ... upper : nil
+            }
+
+            // The caret's line keeps its syntax visible. Re-reading it here, in
+            // the new numbering, is what stops `updateRevealedLine` from taking
+            // a keystroke for a move into a table.
+            if let revealed = revealedLine {
+                let line = old.lineIndex(containing: revealed.location)
+                if moved(line) != nil {
+                    revealedLine = movedRange(revealed, line)
+                } else {
+                    revealedLine = newText.lineRange(for: NSRange(location: caret, length: 0))
+                }
+            }
+
+            if restyleFrom <= restyleTo, restyleTo < map.lines.count {
+                style(from: restyleFrom, to: restyleTo)
+                if let styled = styledRange,
+                   restyleFrom <= styled.upperBound + 1, restyleTo >= styled.lowerBound - 1 {
+                    styledRange = min(restyleFrom, styled.lowerBound) ... max(restyleTo, styled.upperBound)
+                }
+            }
+            updateRevealedLine()
+            return true
         }
 
         /// Drops everything that describes the current text.
@@ -519,6 +728,7 @@ struct MarkdownEditor: NSViewRepresentable {
         private func forgetTextState() {
             map = BlockMap(lines: [], openFrontMatter: false)
             nsText = ""
+            knownTables.removeAll()
             hiddenByLine.removeAll(keepingCapacity: true)
             tablesByLine.removeAll(keepingCapacity: true)
             tableCache.removeAll(keepingCapacity: true)
@@ -530,7 +740,7 @@ struct MarkdownEditor: NSViewRepresentable {
         // MARK: - Revealing the caret's line
 
         private func updateRevealedLine() {
-            guard let textView, let layoutManager = textView.layoutManager else { return }
+            guard let textView, let layoutManager = textView.layoutManager, !textIsAhead else { return }
             let focused = textView.window?.firstResponder === textView
             let caret = min(textView.selectedRange().location, nsText.length)
             let wanted: NSRange? = focused && nsText.length > 0
@@ -556,13 +766,27 @@ struct MarkdownEditor: NSViewRepresentable {
             // revealed one line of raw markdown *underneath* the drawn table
             // while every other line kept its row height: the table appeared to
             // fall apart. Restyling the visible window costs a few milliseconds.
-            if tableTouched(previous) || tableTouched(wanted) {
+            if (tableTouched(previous) || tableTouched(wanted)), !sameTable(previous, wanted) {
                 // Styling is incremental now, so asking for a re-highlight is not
                 // enough on its own — these lines count as already done. Drop the
                 // record so the visible window is genuinely restyled.
                 styledRange = nil
                 highlightVisible()
             }
+        }
+
+        /// True when both lines are rows of one table that is showing as markdown.
+        ///
+        /// Moving the caret inside such a table changes nothing about it: it
+        /// stays markdown. Restyling it anyway — the whole table, column widths
+        /// and all — ran on every keystroke and every arrow key (D-S-P1-01).
+        private func sameTable(_ a: NSRange?, _ b: NSRange?) -> Bool {
+            guard let a, let b else { return false }
+            let first = map.lineIndex(containing: a.location)
+            let second = map.lineIndex(containing: b.location)
+            let low = min(first, second), high = max(first, second)
+            guard high - low <= 5_000, tablesByLine[low] == nil, tablesByLine[high] == nil else { return false }
+            return (low ... high).allSatisfy { isTableRow($0) }
         }
 
         /// True when the range falls inside a block that is (or was) a table.
@@ -619,6 +843,19 @@ struct MarkdownEditor: NSViewRepresentable {
         private func hiddenRanges(forLine line: Int) -> [NSRange] {
             if let cached = hiddenByLine[line] { return cached }
             guard line < map.lines.count else { return [] }
+            // TextKit 1 makes glyphs for the whole document the first time the
+            // view is sized, and each miss here ran the scanner on one line: a
+            // million-line file was scanned line by line before the window
+            // showed anything (dynamic audit 2026-11-12, D-S-P3-04). Only lines
+            // near what is styled can be on screen; the rest get their markers
+            // hidden by `style`, which regenerates their glyphs when they come
+            // into view. Not cached, so that later answer is not shadowed.
+            let near = 500
+            if let styled = styledRange {
+                guard line >= styled.lowerBound - near, line <= styled.upperBound + near else { return [] }
+            } else if line > near {
+                return []
+            }
             let ranges = MarkdownScanner
                 .decorations(text: nsText, map: map, lines: line ..< line + 1)
                 .compactMap { $0.style == .hiddenMarker ? $0.range : nil }
@@ -633,11 +870,34 @@ struct MarkdownEditor: NSViewRepresentable {
         /// Highlighting the whole document on every keystroke is what makes
         /// editors like this feel slow. Off-screen text is styled when it
         /// scrolls into view, which is the only moment it can be looked at.
+        private var highlighting = false
+        private var highlightAgain = false
+
+        /// Laying out the window can resize the text view, and the resize
+        /// notification calls straight back in here. Measured on a 10 000-row
+        /// table: that recursion went hundreds of frames deep and the first
+        /// drawing took 17 s (D-S-P3-04). One pass at a time; a call that
+        /// arrives during a pass asks for one more after it.
         func highlightVisible() {
+            if highlighting {
+                highlightAgain = true
+                return
+            }
+            highlighting = true
+            defer { highlighting = false }
+            var passes = 0
+            repeat {
+                highlightAgain = false
+                highlightVisibleOnce()
+                passes += 1
+            } while highlightAgain && passes < 4
+        }
+
+        private func highlightVisibleOnce() {
             guard let textView,
                   let layoutManager = textView.layoutManager,
                   let container = textView.textContainer,
-                  !map.lines.isEmpty else { return }
+                  !map.lines.isEmpty, !textIsAhead else { return }
 
             let visibleRect = scrollView?.contentView.bounds ?? textView.visibleRect
             let glyphRange = layoutManager.glyphRange(forBoundingRect: visibleRect, in: container)
@@ -697,9 +957,40 @@ struct MarkdownEditor: NSViewRepresentable {
         /// only unit its column widths can be computed from.
         private func wholeTables(_ span: (Int, Int)) -> (Int, Int) {
             var (first, last) = span
-            while first > 0, isTableRow(first), isTableRow(first - 1) { first -= 1 }
-            while last < map.lines.count - 1, isTableRow(last), isTableRow(last + 1) { last += 1 }
+            if !isLargeTable(first) {
+                while first > 0, isTableRow(first), isTableRow(first - 1) { first -= 1 }
+            }
+            if !isLargeTable(last) {
+                while last < map.lines.count - 1, isTableRow(last), isTableRow(last + 1) { last += 1 }
+            }
             return (first, last)
+        }
+
+        /// Tables longer than this are not drawn as a grid; they stay markdown.
+        ///
+        /// Every cell of a drawn table is its own text layout. At 100 000 rows
+        /// that was 2.3 GB and 67 s before the window showed anything, and the
+        /// pipes of a raw table are lined up from all of its rows too (dynamic
+        /// audit 2026-11-12, D-S-P1-01). A table that long is data, not a page
+        /// to read, so it is shown the way the file has it.
+        static let largestDrawnTable = 2_000
+
+        /// The tables measured since the text last changed.
+        private var knownTables: [ClosedRange<Int>] = []
+
+        /// All the lines of the table `line` belongs to, or nil off a table.
+        private func tableExtent(_ line: Int) -> ClosedRange<Int>? {
+            guard isTableRow(line) else { return nil }
+            if let known = knownTables.first(where: { $0.contains(line) }) { return known }
+            var first = line, last = line
+            while first > 0, isTableRow(first - 1) { first -= 1 }
+            while last < map.lines.count - 1, isTableRow(last + 1) { last += 1 }
+            knownTables.append(first ... last)
+            return first ... last
+        }
+
+        private func isLargeTable(_ line: Int) -> Bool {
+            (tableExtent(line)?.count ?? 0) > Self.largestDrawnTable
         }
 
         /// Everything the styling of one span of lines needs, done once.
@@ -736,6 +1027,14 @@ struct MarkdownEditor: NSViewRepresentable {
                 lines: firstLine ..< (lastLine + 1),
                 existing: decorations
             )
+            // A table too long to draw is shown as it is in the file: padding
+            // its pipes would mean measuring every one of its rows.
+            if (firstLine ... lastLine).contains(where: { isLargeTable($0) }) {
+                decorations.removeAll { decoration in
+                    guard case .tableCellPad = decoration.style else { return false }
+                    return isLargeTable(map.lineIndex(containing: decoration.range.location))
+                }
+            }
             MarkdownStyle.apply(decorations, to: storage, resetting: reset)
 
             // Refresh the hidden-marker cache for exactly the lines just styled,
@@ -776,6 +1075,13 @@ struct MarkdownEditor: NSViewRepresentable {
             let available = editorWidth()
             guard available > TableLayout.minimumColumnWidth else { return }
 
+            // One edit for all the row heights. Each `addAttribute` outside it is
+            // an edit of its own, and every edit re-checks the attributes of the
+            // whole range — row by row that was quadratic: 14 s to first show a
+            // 10 000-row table, nearly all of it here (dynamic audit 2026-11-12).
+            storage.beginEditing()
+            defer { storage.endEditing() }
+
             var line = firstLine
             while line <= lastLine {
                 guard isTableRow(line) else {
@@ -787,6 +1093,10 @@ struct MarkdownEditor: NSViewRepresentable {
                 defer { line = last + 1 }
 
                 let block = line ... last
+                if isLargeTable(line) {
+                    for row in block { tablesByLine[row] = nil }
+                    continue
+                }
                 // Caret inside: leave the markdown alone so it can be edited.
                 if let revealedLine, block.contains(map.lineIndex(containing: revealedLine.location)) {
                     for row in block { tablesByLine[row] = nil }

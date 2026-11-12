@@ -30,11 +30,16 @@ nonisolated enum MarkdownScanner {
     private static let wikiRE = re(#"(\[\[)([^\[\]\n|]+)(?:\|([^\[\]\n]+))?(\]\])"#)
     private static let boldItalicRE = re(#"(\*\*\*)(?!\s)([^*\n]+?)(?<!\s)(\*\*\*)"#)
     private static let boldStarRE = re(#"(?<!\*)(\*\*)(?!\s)((?:[^*\n]|\*(?!\*))+?)(?<!\s)(\*\*)(?!\*)"#)
-    private static let boldUnderRE = re(#"(?<![\w_])(__)(?!\s)([^\n]+?)(?<!\s)(__)(?![\w_])"#)
+    // The content of `__`, `~~` and `==` may not contain the marker itself.
+    // With `[^\n]+?` a line of `~~x ~~x ~~x …` never closed, so every opening
+    // marker searched to the end of the line: 10 KB took a second, 20 KB froze
+    // the editor (dynamic audit 2026-11-12, D-S-P2-02). Stopping at the next
+    // marker makes each search short; `boldStarRE` above was already built so.
+    private static let boldUnderRE = re(#"(?<![\w_])(__)(?!\s)((?:[^_\n]|_(?!_))+?)(?<!\s)(__)(?![\w_])"#)
     private static let italicStarRE = re(#"(?<![*\w])(\*)(?!\s)([^*\n]+?)(?<!\s)(\*)(?![*\w])"#)
     private static let italicUnderRE = re(#"(?<![\w_])(_)(?!\s)([^_\n]+?)(?<!\s)(_)(?![\w_])"#)
-    private static let strikeRE = re(#"(~~)(?!\s)([^\n]+?)(?<!\s)(~~)"#)
-    private static let highlightRE = re(#"(==)(?!\s)([^\n]+?)(?<!\s)(==)"#)
+    private static let strikeRE = re(#"(~~)(?!\s)((?:[^~\n]|~(?!~))+?)(?<!\s)(~~)"#)
+    private static let highlightRE = re(#"(==)(?!\s)((?:[^=\n]|=(?!=))+?)(?<!\s)(==)"#)
 
     private static let headingRE = re(#"^(#{1,6})([ \t]+)(.*)$"#)
     private static let quoteRE = re(#"^([ \t]*>+[ \t]?)"#)

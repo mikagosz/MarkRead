@@ -94,13 +94,10 @@ nonisolated struct BlockMap {
     }
 
     private static func build(_ text: NSString, allowFrontMatter: Bool) -> BlockMap {
-        var result: [(NSRange, Kind)] = []
+        var result: [(range: NSRange, kind: Kind)] = []
         result.reserveCapacity(max(16, text.length / 40))
+        var state = ScanState(allowFrontMatter: allowFrontMatter)
         var location = 0
-        var inFence = false
-        var fenceChar: unichar = 0
-        var fenceCount = 0
-        var inFrontMatter = false
         var lineIndex = 0
 
         // `location < length`, plus the no-progress guard below. Asking
@@ -109,44 +106,138 @@ nonisolated struct BlockMap {
         // not an empty range there — so a loop keyed on `<=` never advances.
         while location < text.length {
             let lineRange = text.lineRange(for: NSRange(location: location, length: 0))
-            // Fences live inside blockquotes too — "> ```bash" opens a code block
-            // just as "```bash" does. Stripping the quote markers first is what
-            // makes those blocks come out as code instead of prose. Found by the
-            // swift-markdown oracle on real notes.
-            let core = unquoted(text, trimmed(text, lineRange))
-
-            var kind: Kind = .normal
-
-            if allowFrontMatter, lineIndex == 0, isRun(text, core, of: 0x2D, exactly: 3) {
-                inFrontMatter = true
-                kind = .frontMatter
-            } else if inFrontMatter {
-                kind = .frontMatter
-                if isRun(text, core, of: 0x2D, exactly: 3) || isRun(text, core, of: 0x2E, exactly: 3) {
-                    inFrontMatter = false
-                }
-            } else if inFence {
-                if leadingRun(text, core, of: fenceChar) >= fenceCount {
-                    inFence = false
-                    kind = .fence
-                } else {
-                    kind = .code
-                }
-            } else if let (char, count) = openingFence(text, core) {
-                inFence = true
-                fenceChar = char
-                fenceCount = count
-                kind = .fence
-            }
-
-            result.append((lineRange, kind))
+            result.append((lineRange, state.classify(text, lineRange, lineIndex: lineIndex)))
             lineIndex += 1
 
             let next = NSMaxRange(lineRange)
             if next <= location { break }
             location = next
         }
-        return BlockMap(lines: result, openFrontMatter: inFrontMatter)
+        return BlockMap(lines: result, openFrontMatter: state.inFrontMatter)
+    }
+
+    /// The only state the classification carries from one line to the next.
+    ///
+    /// After a `.normal` line all of it is at rest — no fence and no front
+    /// matter open — which is what lets `patched` restart the scan there.
+    private struct ScanState {
+        let allowFrontMatter: Bool
+        var inFence = false
+        var fenceChar: unichar = 0
+        var fenceCount = 0
+        var inFrontMatter = false
+
+        mutating func classify(_ text: NSString, _ lineRange: NSRange, lineIndex: Int) -> Kind {
+            // Fences live inside blockquotes too — "> ```bash" opens a code block
+            // just as "```bash" does. Stripping the quote markers first is what
+            // makes those blocks come out as code instead of prose. Found by the
+            // swift-markdown oracle on real notes.
+            let core = unquoted(text, trimmed(text, lineRange))
+
+            if allowFrontMatter, lineIndex == 0, isRun(text, core, of: 0x2D, exactly: 3) {
+                inFrontMatter = true
+                return .frontMatter
+            } else if inFrontMatter {
+                if isRun(text, core, of: 0x2D, exactly: 3) || isRun(text, core, of: 0x2E, exactly: 3) {
+                    inFrontMatter = false
+                }
+                return .frontMatter
+            } else if inFence {
+                if leadingRun(text, core, of: fenceChar) >= fenceCount {
+                    inFence = false
+                    return .fence
+                }
+                return .code
+            } else if let (char, count) = openingFence(text, core) {
+                inFence = true
+                fenceChar = char
+                fenceCount = count
+                return .fence
+            }
+            return .normal
+        }
+    }
+
+    /// The map after one edit, without classifying the whole document again.
+    ///
+    /// `build` on every keystroke cost 160 ms on a 1-million-line file — all of
+    /// it spent re-reading lines the keystroke did not touch (dynamic audit
+    /// 2026-11-12, D-S-P3-04). Here the scan restarts after the last `.normal`
+    /// line before the edit and stops at the first line past it where the old
+    /// map, shifted, is provably the same again: the line starts where an old
+    /// line started and both scans are at rest. Everything after is the old
+    /// entries moved by the length change.
+    ///
+    /// `nil` means "do it the slow way": front matter on line 1, before or
+    /// after the edit (whether it closes depends on the rest of the file), or an
+    /// edit the old map cannot place.
+    ///
+    /// - Returns: the new map, the first line that was rescanned, the last old
+    ///   line it replaced and the last new line it produced.
+    static func patched(_ old: BlockMap, text: NSString, location: Int, removed: Int, inserted: Int)
+        -> (map: BlockMap, first: Int, oldLast: Int, newLast: Int)? {
+        guard !old.lines.isEmpty, !old.openFrontMatter, old.lines[0].kind != .frontMatter else { return nil }
+        let delta = inserted - removed
+        let oldLength = NSMaxRange(old.lines[old.lines.count - 1].range)
+        guard text.length == oldLength + delta, location >= 0, location + removed <= oldLength else { return nil }
+        // A file opening with `---` is front matter only if a closing line comes
+        // later — and the edit may be what adds or removes that line.
+        if text.length > 0, isRun(text, unquoted(text, trimmed(text, text.lineRange(for: NSRange(location: 0, length: 0)))),
+                                   of: 0x2D, exactly: 3) {
+            return nil
+        }
+
+        var start = old.lineIndex(containing: location)
+        // An edit at the very start of a line can join it to the line above.
+        if start > 0, old.lines[start].range.location == location { start -= 1 }
+        while start > 0, old.lines[start - 1].kind != .normal { start -= 1 }
+
+        let editEnd = location + inserted     // in the new text
+        var state = ScanState(allowFrontMatter: start == 0)
+        var scanned: [(range: NSRange, kind: Kind)] = []
+        var cursor = old.lines[start].range.location
+        var resume: Int?                      // first old line kept as it was
+        var previousKind: Kind = .normal
+
+        while cursor < text.length {
+            if cursor > editEnd, previousKind == .normal {
+                // Same text from here on in both versions. Where an old line
+                // began at the same place, with the old scan at rest too, the
+                // rest of the old map is still right.
+                let oldStart = cursor - delta
+                let candidate = old.lineIndex(containing: oldStart)
+                if candidate < old.lines.count, old.lines[candidate].range.location == oldStart,
+                   candidate > 0, old.lines[candidate - 1].kind == .normal {
+                    resume = candidate
+                    break
+                }
+            }
+            let lineRange = text.lineRange(for: NSRange(location: cursor, length: 0))
+            let kind = state.classify(text, lineRange, lineIndex: start + scanned.count)
+            scanned.append((lineRange, kind))
+            previousKind = kind
+            let next = NSMaxRange(lineRange)
+            if next <= cursor { break }
+            cursor = next
+        }
+
+        if start == 0, scanned.first?.kind == .frontMatter { return nil }
+
+        var lines = Array(old.lines[0 ..< start])
+        lines.reserveCapacity(old.lines.count + scanned.count)
+        lines.append(contentsOf: scanned)
+        let oldLast: Int
+        if let resume {
+            oldLast = resume - 1
+            for entry in old.lines[resume...] {
+                lines.append((NSRange(location: entry.range.location + delta, length: entry.range.length), entry.kind))
+            }
+        } else {
+            oldLast = old.lines.count - 1
+            // A file that no longer ends where the scan stopped would leave an
+            // old trailing line behind; the scan read to the end, so it did not.
+        }
+        return (BlockMap(lines: lines, openFrontMatter: false), start, oldLast, start + scanned.count - 1)
     }
 
     // MARK: - Character helpers (no allocation)
